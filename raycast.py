@@ -5,6 +5,7 @@ This module has the classed and methods related to Volume rendering using
 the Ray Casting method.
 """
 
+import bgl
 
 import OpenGL
 from OpenGL.GL import *
@@ -13,7 +14,7 @@ from OpenGL.GL.shaders import *
 import numpy as np
 import math, sys 
 
-import raycube, glutils, volreader
+from . import raycube, glutils, volreader
 
 strVS = """
 #version 330 core
@@ -124,22 +125,23 @@ class RayCastRender:
         self.camera = Camera()
         
     def draw(self):
-
         # build projection matrix
-        pMatrix = glutils.perspective(45.0, self.aspect, 0.1, 100.0)
-       
+        #pMatrix = glutils.perspective(45.0, self.aspect, 0.1, 100.0)
+        
+        #instead, get the projection matrix from bgl
         # modelview matrix
-        mvMatrix = glutils.lookAt(self.camera.eye, self.camera.center, 
-                                  self.camera.up)
+        #mvMatrix = glutils.lookAt(self.camera.eye, self.camera.center, 
+        #                          self.camera.up)
         # render
         
         # generate ray-cube back-face texture
-        texture = self.raycube.renderBackFace(pMatrix, mvMatrix)
+        #texture = self.raycube.renderBackFace(pMatrix, mvMatrix)
         
+        texture = self.raycube.renderBackFace(bgl.GL_PROJECTION_MATRIX, bgl.GL_MODELVIEW_MATRIX)
         # set shader program
         glUseProgram(self.program)
 
-        # set window dimensions
+        # set window dimensions, dont do this, blender handles it
         glUniform2f(glGetUniformLocation(self.program, b"uWinDims"),
                     float(self.width), float(self.height))
 
@@ -154,8 +156,10 @@ class RayCastRender:
         glUniform1i(glGetUniformLocation(self.program, b"texVolume"), 1)
 
         # draw front face of cubes
-        self.raycube.renderFrontFace(pMatrix, mvMatrix, self.program)
-                
+        self.raycube.renderFrontFace(bgl.GL_PROJECTION_MATRIX, bgl.GL_MODELVIEW_MATRIX, self.program)
+        #self.raycube.renderFrontFace(pMatrix, mvMatrix, self.program)
+        
+        #self.raycube.renderCube(pMatrix, mvMatrix, program, cullFace)        
         #self.render(pMatrix, mvMatrix)
 
     def keyPressed(self, key):
