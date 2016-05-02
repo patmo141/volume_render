@@ -31,7 +31,7 @@ layout(location = 23) uniform bool clip;
 layout(location = 24) uniform bool dither;
 layout(location = 25) uniform float opacityFactor;
 layout(location = 26) uniform float lightFactor;
-layout(location = 27) uniform sampler2D tex;
+layout(location = 27) uniform sampler3D tex;
 layout(location = 28) uniform sampler1D ramp;
 
 varying vec3 pos;
@@ -183,7 +183,7 @@ void main()
     {
         float tf_pos;
 
-        tf_pos = tex3D(tex, pos);   
+        tf_pos = texture3D(tex, pos).x;   
         value = vec4(tf_pos);
 
         // Process the volume sample

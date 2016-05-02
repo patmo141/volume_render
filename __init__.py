@@ -55,6 +55,16 @@ from .raycast import RayCastRender
 
 from .vol_shaders import vs, fs
 from bgl import *
+from OpenGL import GL
+
+
+#perhaps, we do not need globals
+#global volrender_progam 
+volrender_program = None
+#global volrender_ramptext 
+volrender_ramptext = None
+volrender_texture = None
+
 
 class ImportImageVolume(Operator, ImportHelper):
     """Imports and then clears volume data"""
@@ -104,20 +114,23 @@ class ImportImageVolume(Operator, ImportHelper):
         print('loading texture')
         self.volume = loadVolume(self.filepath)
         
-        (texture, width, height, depth) = self.volume
+        global volrender_texture
+        (volrender_texture, width, height, depth) = self.volume
+
+
+#        deactivate it for now
+#        bme = bmesh.new()
+#        bmesh.ops.create_cube(bme, size = 1)
         
-        bme = bmesh.new()
-        bmesh.ops.create_cube(bme, size = 1)
-        
-        vol_cube = bpy.data.meshes.new("Vol Cube")
-        cube = bpy.data.objects.new("Vol Cube", vol_cube)
-        bme.to_mesh(vol_cube)
-        context.scene.objects.link(cube)
-        bme.free()
+#        vol_cube = bpy.data.meshes.new("Vol Cube")
+#        cube = bpy.data.objects.new("Vol Cube", vol_cube)
+#        bme.to_mesh(vol_cube)
+#        context.scene.objects.link(cube)
+#        bme.free()
         
         
         print('added a cube and succsesfully created 3d OpenGL texture from Image Stack')
-        print('the image id as retuned by glGenTextures is %i' % texture)
+        print('the image id as retuned by glGenTextures is %i' % volrender_texture)
         #print(self.filename_ext)
 
         return {'FINISHED'}
@@ -153,27 +166,23 @@ class ImportDICOMVoulme(Operator, ImportHelper):
         
         self.volume = loadDCMVolume(self.filepath)
         
-        (texture, width, height, depth) = self.volume
+        global volrender_texture
+        (volrender_texture, width, height, depth) = self.volume
+
+#        deactivate it for now
+#        bme = bmesh.new()
+#        bmesh.ops.create_cube(bme, size = 1)
         
-        bme = bmesh.new()
-        bmesh.ops.create_cube(bme, size = 1)
-        
-        vol_cube = bpy.data.meshes.new("Vol Cube")
-        cube = bpy.data.objects.new("Vol Cube", vol_cube)
-        bme.to_mesh(vol_cube)
-        context.scene.objects.link(cube)
-        bme.free()
+#        vol_cube = bpy.data.meshes.new("Vol Cube")
+#        cube = bpy.data.objects.new("Vol Cube", vol_cube)
+#        bme.to_mesh(vol_cube)
+#        context.scene.objects.link(cube)
+#        bme.free()
         
         print('added a cube and succsesfully created 3d OpenGL texture from DICOM stack')
-        print('the image id as retuned by glGenTextures is %i' % texture)
+        print('the image id as retuned by glGenTextures is %i' % volrender_texture)
         
         return {'FINISHED'}
-
-#perhaps, we do not need globals
-global volrender_progam 
-volrender_program = None
-global volrender_ramptext 
-volrender_ramptext = None
 
 rampColors = 256
 step  = 1.0 / (rampColors - 1.0)
@@ -236,7 +245,7 @@ def update_colorRamp(ramp, rampTex, rampColors, step):
 
 #       oldColor = (pixels[1][0], pixels[1][1], pixels[1][2], pixels[1][3])
 
-def replaceShader():
+def replaceShader(tex):
     program = -1
 
     for prog in range(32767):
@@ -281,6 +290,13 @@ def replaceShader():
         print("---Fragment Shader fault---")                    
         print("".join(chr(infoLog[i]) for i in range(length[0])))
 
+    glActiveTexture(GL_TEXTURE0 + tex)
+    glBindTexture(GL_TEXTURE_3D, tex)
+    glUseProgram(program)
+    glUniform1i(27, tex)
+    glUseProgram(0)
+    glActiveTexture(GL_TEXTURE0)
+
     return program
    
 class ShaderReplace(Operator):
@@ -289,6 +305,9 @@ class ShaderReplace(Operator):
     bl_label = "Replace Shader"
 
     def execute(self,context):
+        global volrender_program 
+        global volrender_texture
+        global volrender_ramptext 
         
         ########  TEMPORARY GRABS CUBE WITH EXISTING TEXTURE    ####
         ########  Will be replaced with code to generate a cube ####
@@ -316,17 +335,13 @@ class ShaderReplace(Operator):
         if context.user_preferences.system.use_mipmaps:
             context.user_preferences.system.use_mipmaps = False
         
+        context.scene.game_settings.material_mode = 'GLSL'
         
-        
-  
-        global volrender_program 
-        volrender_program = replaceShader()
-        print('volrender program is')
-        print(volrender_program)
-        
-        global volrender_ramptext 
+        volrender_program = replaceShader(volrender_texture)
         volrender_ramptext = initColorRamp(volrender_program)
-        
+
+        print('program ', volrender_program, '  texture ', volrender_texture, '  rampText ', volrender_ramptext)
+      
         #will comment these out because can't get to obj
         #data at registration time
         update_azimuth(context.object, bpy.context)
@@ -398,14 +413,12 @@ def initObjectProperties():
         name = "Is Volume",
         default = False,
         description = "Object container for volume?")
-
     
     bpy.types.Object.clip = BoolProperty(
         name = "Clip",
         default = False,
         description = "Use Clip Plane",
         update=update_clip)
-
 
     bpy.types.Object.dither = BoolProperty(
         name = "Dither",
@@ -519,8 +532,13 @@ def unregister():
     bpy.utils.unregister_class(ShaderReplace)
     bpy.utils.unregister_class(UIPanel)
      
+    global volrender_texture 
     global volrender_ramptext 
 
     if volrender_ramptext != None:
-        glDeleteTextures (1, [volrender_ramptext])
+        GL.glDeleteTextures (1, [volrender_ramptext])
+
+    if volrender_texture != None:
+        GL.glDeleteTextures (1, [volrender_texture])
+
 
