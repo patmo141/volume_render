@@ -1,3 +1,12 @@
+#----------------------------------------------------------
+# File .py
+#----------------------------------------------------------
+import bpy
+from bpy.props import *
+from bgl import * #Iam lazy I don't want to type always bgl.gl....
+
+#oldColor = (0.0, 0.0, 0.0, 0.0)
+
 #
 # Shader
 #
@@ -22,7 +31,8 @@ layout(location = 23) uniform bool clip;
 layout(location = 24) uniform bool dither;
 layout(location = 25) uniform float opacityFactor;
 layout(location = 26) uniform float lightFactor;
-uniform sampler2D tex;
+layout(location = 27) uniform sampler2D tex;
+layout(location = 28) uniform sampler1D ramp;
 
 varying vec3 pos;
 
@@ -67,10 +77,10 @@ vec3 p2cart(float azimuth, float elevation)
     float ele = -elevation * pi / 180.0;
     float azi = (azimuth + 90.0) * pi / 180.0;
 
-    k = cos( ele );
-    z = sin( ele );
-    y = sin( azi ) * k;
-    x = cos( azi ) * k;
+    k = cos(ele);
+    z = sin(ele);
+    y = sin(azi) * k;
+    x = cos(azi) * k;
 
     return vec3( x, z, y );
 }
@@ -98,7 +108,7 @@ float tex3D(sampler2D texture, vec3 volpos)
     texpos2.x = dx2+(volpos.x/slicesOverX);
     texpos2.y = dy2+(volpos.y/slicesOverY);
 
-    return mix( texture2D(texture,texpos1).x, texture2D(texture,texpos2).x, (volpos.z*numberOfSlices)-s1);
+    return mix(texture2D(texture,texpos1).x, texture2D(texture,texpos2).x, (volpos.z*numberOfSlices)-s1);
 }
 
 void main()
@@ -136,11 +146,18 @@ void main()
         bool frontface = (dot(dir , clipPlane) > 0.0);
         //next, distance from ray origin to clip plane
         float dis = dot(dir,clipPlane);
-        if (dis != 0.0  )  dis = (-clipPlaneDepth - dot(clipPlane, rayStart.xyz-0.5)) / dis;
-        if ((!frontface) && (dis < 0.0)) return;
-        if ((frontface) && (dis > len)) return;
+
+        if (dis != 0.0 )
+            dis = (-clipPlaneDepth - dot(clipPlane, rayStart.xyz-0.5)) / dis;
+
+        if ((!frontface) && (dis < 0.0))
+            return;
+
+        if ((frontface) && (dis > len))
+            return;
+
         if ((dis > 0.0) && (dis < len)) 
-            {
+        {
             if (frontface) {
                 rayStart = rayStart + dir * dis;
             } else {
@@ -162,18 +179,17 @@ void main()
         pos = pos + step * (fract(sin(gl_FragCoord.x * 12.9898 + gl_FragCoord.y * 78.233) * 43758.5453));
     }
     
-    for (int i=0; i < numSamples && travel > 0.0; ++i, pos += step, travel -= stepSize) {
-
+    for (int i=0; i < numSamples && travel > 0.0; ++i, pos += step, travel -= stepSize)
+    {
         float tf_pos;
 
         tf_pos = tex3D(tex, pos);   
-        
         value = vec4(tf_pos);
 
         // Process the volume sample
         sample.a = value.a * opacityFactor * (1.0/float(numSamples));
+        value.rgb = texture1D(ramp, sample.a).rgb;
         sample.rgb = value.rgb * sample.a * lightFactor;
-                        
         accum.rgb += (1.0 - accum.a) * sample.rgb;
         accum.a += sample.a;
 
@@ -183,5 +199,6 @@ void main()
 
     gl_FragColor.rgb = accum.rgb;
     gl_FragColor.a = accum.a;
+
 }
 """

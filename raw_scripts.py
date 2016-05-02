@@ -5,6 +5,8 @@ import bpy
 from bpy.props import *
 from bgl import * #Iam lazy I don't want to type always bgl.gl....
 
+#oldColor = (0.0, 0.0, 0.0, 0.0)
+
 #
 # Shader
 #
@@ -29,7 +31,8 @@ layout(location = 23) uniform bool clip;
 layout(location = 24) uniform bool dither;
 layout(location = 25) uniform float opacityFactor;
 layout(location = 26) uniform float lightFactor;
-uniform sampler2D tex;
+layout(location = 27) uniform sampler2D tex;
+layout(location = 28) uniform sampler1D ramp;
 
 varying vec3 pos;
 
@@ -74,10 +77,10 @@ vec3 p2cart(float azimuth, float elevation)
     float ele = -elevation * pi / 180.0;
     float azi = (azimuth + 90.0) * pi / 180.0;
 
-    k = cos( ele );
-    z = sin( ele );
-    y = sin( azi ) * k;
-    x = cos( azi ) * k;
+    k = cos(ele);
+    z = sin(ele);
+    y = sin(azi) * k;
+    x = cos(azi) * k;
 
     return vec3( x, z, y );
 }
@@ -105,7 +108,7 @@ float tex3D(sampler2D texture, vec3 volpos)
     texpos2.x = dx2+(volpos.x/slicesOverX);
     texpos2.y = dy2+(volpos.y/slicesOverY);
 
-    return mix( texture2D(texture,texpos1).x, texture2D(texture,texpos2).x, (volpos.z*numberOfSlices)-s1);
+    return mix(texture2D(texture,texpos1).x, texture2D(texture,texpos2).x, (volpos.z*numberOfSlices)-s1);
 }
 
 void main()
@@ -143,11 +146,18 @@ void main()
         bool frontface = (dot(dir , clipPlane) > 0.0);
         //next, distance from ray origin to clip plane
         float dis = dot(dir,clipPlane);
-        if (dis != 0.0  )  dis = (-clipPlaneDepth - dot(clipPlane, rayStart.xyz-0.5)) / dis;
-        if ((!frontface) && (dis < 0.0)) return;
-        if ((frontface) && (dis > len)) return;
+
+        if (dis != 0.0 )
+            dis = (-clipPlaneDepth - dot(clipPlane, rayStart.xyz-0.5)) / dis;
+
+        if ((!frontface) && (dis < 0.0))
+            return;
+
+        if ((frontface) && (dis > len))
+            return;
+
         if ((dis > 0.0) && (dis < len)) 
-            {
+        {
             if (frontface) {
                 rayStart = rayStart + dir * dis;
             } else {
@@ -169,18 +179,17 @@ void main()
         pos = pos + step * (fract(sin(gl_FragCoord.x * 12.9898 + gl_FragCoord.y * 78.233) * 43758.5453));
     }
     
-    for (int i=0; i < numSamples && travel > 0.0; ++i, pos += step, travel -= stepSize) {
-
+    for (int i=0; i < numSamples && travel > 0.0; ++i, pos += step, travel -= stepSize)
+    {
         float tf_pos;
 
         tf_pos = tex3D(tex, pos);   
-        
         value = vec4(tf_pos);
 
         // Process the volume sample
         sample.a = value.a * opacityFactor * (1.0/float(numSamples));
+        value.rgb = texture1D(ramp, sample.a).rgb;
         sample.rgb = value.rgb * sample.a * lightFactor;
-                        
         accum.rgb += (1.0 - accum.a) * sample.rgb;
         accum.a += sample.a;
 
@@ -190,13 +199,70 @@ void main()
 
     gl_FragColor.rgb = accum.rgb;
     gl_FragColor.a = accum.a;
+
 }
 """
 
+def initColorRamp(program):
+    # Compositor need to be activated first before we can access the nodes.
+    bpy.context.scene.use_nodes = True
+
+    scene = bpy.context.scene
+    nodes = scene.node_tree.nodes
+
+    # Check if there already a color ramp is existing.
+    if not "ColorRamp" in nodes:
+        nodes.new("CompositorNodeValToRGB")
+
+    # Just ad a black image to the shader. the correct colors wil be set by the
+    # update function. So the commented commands are not necessary.
+    pixels = Buffer(GL_FLOAT, [rampColors, 4])
+
+#   for x in range(0, rampColors):
+#       pixels[x] = nodes['ColorRamp'].color_ramp.evaluate(x * step)
+
+    rampTex = Buffer(GL_INT, [1])
+    glGenTextures(1, rampTex)
+    glPixelStorei(GL_UNPACK_ALIGNMENT,1)
+    glBindTexture(GL_TEXTURE_1D, rampTex[0])
+    glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP)
+    glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA8, rampColors, 0, GL_RGBA, GL_FLOAT, pixels)
+    glBindTexture(GL_TEXTURE_1D, 0)
+
+#   bpy.context.object.colorRamp = pixels[1][0]
+
+#   glActiveTexture(GL_TEXTURE0 + rampTex[0])
+#   glBindTexture(GL_TEXTURE_1D, rampTex[0])
+    glUseProgram(program)
+    glUniform1i(28, rampTex[0])
+    glUseProgram(0)
+#   glActiveTexture(GL_TEXTURE0)
+
+    return (rampTex[0])
+
+def update_colorRamp(ramp, rampTex, rampColors, step):
+#   global oldColor
+
+#   if oldColor != ramp.color_ramp.evaluate(step):
+    pixels = Buffer(GL_FLOAT, [rampColors, 4])
+
+    for x in range(0, rampColors):
+       pixels[x] = ramp.color_ramp.evaluate(x * step)
+
+    glActiveTexture(GL_TEXTURE0 + rampTex)
+    glBindTexture(GL_TEXTURE_1D, rampTex)
+    glTexSubImage1D(GL_TEXTURE_1D, 0, 0, rampColors, GL_RGBA, GL_FLOAT, pixels)
+    glActiveTexture(GL_TEXTURE0)
+    
+    # update Viewport By stteing the time line frame
+    bpy.context.scene.frame_set(0)
+
+#       oldColor = (pixels[1][0], pixels[1][1], pixels[1][2], pixels[1][3])
+
 def replaceShader():
-    #program_id = Buffer(GL_INT, 1)
-    #glGetIntegerv(0x8B8D, program_id)#GL_CURRENT_PROGRAM
-    #self.program = program_id[0]
+    program = -1
 
     for prog in range(32767):
         if glIsProgram(prog) == True:
@@ -208,9 +274,6 @@ def replaceShader():
     shaders = Buffer(GL_BYTE, [maxCount])
     glGetAttachedShaders(program, maxCount, count, shaders)
 
-    #print(self.program)
-    #print(shaders)
-        
     #Get the original vertex and fragment sahder
     vertShader = shaders[0]
     fragShader = shaders[4]
@@ -236,9 +299,8 @@ def replaceShader():
         glDeleteShader(fragShader)
     else:
         #print error log
-        own["error"] = True
         maxLength = 1000
-        length = Buffer(GL_INT, 1) #Blender generates a GL_BYTE instead
+        length = Buffer(GL_INT, 1)
         infoLog = Buffer(GL_BYTE, [maxLength])
         glGetShaderInfoLog(fragShader, maxLength, length, infoLog)
         print("---Fragment Shader fault---")                    
@@ -285,7 +347,6 @@ def update_lightFactor(self, context):
     glUniform1f(26, self.lightFactor) 
     glUseProgram(0)
 
-
 #
 #   Store properties in the active scene
 #
@@ -329,7 +390,7 @@ def initSceneProperties(obj):
         min = 0,
         max = 10,
         update = update_lightFactor)
-        
+
     bpy.types.Object.clip = BoolProperty(
         name = "Clip", 
         description = "True or False?",
@@ -343,50 +404,24 @@ def initSceneProperties(obj):
     obj['dither'] = False
 
 
-""" 
-    # Example CODE
-    bpy.types.Object.MyInt = IntProperty(
-        name = "Integer", 
-        description = "Enter an integer")
-    obj['MyInt'] = 17
- 
-    bpy.types.Object.MyFloat = FloatProperty(
-        name = "Float", 
-        description = "Enter a float",
-        default = 33.33,
-        min = -100,
-        max = 100)
- 
-    bpy.types.Object.MyBool = BoolProperty(
-        name = "Boolean", 
-        description = "True or False?")
-    obj['MyBool'] = True
- 
-    bpy.types.Object.MyEnum = EnumProperty(
-        items = [('Eins', 'Un', 'One'), 
-                 ('Zwei', 'Deux', 'Two'),
-                 ('Drei', 'Trois', 'Three')],
-        name = "Ziffer")
-    obj['MyEnum'] = 2
- 
-    bpy.types.Object.MyString = StringProperty(
-        name = "String")
-    obj['MyString'] = "Lorem ipsum dolor sit amet"
-    return
-"""
+rampColors = 256
+step  = 1.0 / (rampColors - 1.0)
+obj = bpy.data.objects['Cube']
 
-initSceneProperties(bpy.context.object)
+bpy.context.user_preferences.system.use_mipmaps = False
+
+initSceneProperties(obj)
 program = replaceShader()
+rampTex = initColorRamp(program)
 
 #
 #   Menu in UI region
 #
 class UIPanel(bpy.types.Panel):
-    bl_label = "Property panel"
+    bl_label = "Volume Ray Tracer"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
 
-    obj = bpy.context.object
     update_azimuth(obj, bpy.context)
     update_elevation(obj, bpy.context)
     update_clipPlaneDepth(obj, bpy.context)
@@ -397,7 +432,7 @@ class UIPanel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        obj = context.object
+        scene = bpy.context.scene
 
         layout.prop(obj, 'azimuth')
         layout.prop(obj, 'elevation')
@@ -407,38 +442,18 @@ class UIPanel(bpy.types.Panel):
         layout.prop(obj, 'clip')
         layout.prop(obj, 'dither')
 
-"""
-        layout.prop(obj, 'MyInt', icon='BLENDER', toggle=True)
-        layout.prop(obj, 'MyFloat')
-        layout.prop(obj, 'MyBool')
-        layout.prop(obj, 'MyEnum')
-        layout.prop(obj, 'MyString')
-        layout.operator("idname_must.be_all_lowercase_and_contain_one_dot")
-"""
-#
-#   The button prints the values of the properites in the console.
-#
-""" 
-class OBJECT_OT_PrintPropsButton(bpy.types.Operator):
-    bl_idname = "idname_must.be_all_lowercase_and_contain_one_dot"
-    bl_label = "Print props"
- 
-    def execute(self, context):
-        obj = context.object
-        printProp("Int: ", 'MyInt', obj)
-        printProp("Float:  ", 'MyFloat', obj)
-        printProp("Bool:   ", 'MyBool', obj)
-        printProp("Enum:   ", 'MyEnum', obj)
-        printProp("String: ", 'MyString', obj)
-        return{'FINISHED'}  
- 
-def printProp(label, key, obj):
-    try:
-        val = obj[key]
-    except:
-        val = 'Undefined'
-    print("%s %s" % (key, val))
+        cr_node = scene.node_tree.nodes['ColorRamp']
+        layout.template_color_ramp(cr_node, "color_ramp", expand=True)
 
-"""
-#   Registration
-bpy.utils.register_module(__name__)
+        update_colorRamp(cr_node, rampTex, rampColors, step)
+
+def register():
+    bpy.utils.register_class(UIPanel)
+
+def unregister():
+    bpy.utils.unregister_class(UIPanel)
+    glDeleteTextures (1, [rampTex])
+
+
+if __name__ == "__main__":
+    register()
