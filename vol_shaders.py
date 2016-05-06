@@ -1,15 +1,8 @@
-#----------------------------------------------------------
-# File .py
-#----------------------------------------------------------
-import bpy
-from bpy.props import *
-from bgl import * #Iam lazy I don't want to type always bgl.gl....
-
-#oldColor = (0.0, 0.0, 0.0, 0.0)
-
 #
 # Shader
 #
+#""" this line is needed for syntax high lighting in Notepad++.
+
 vs = """
 varying vec3 pos;
 
