@@ -57,8 +57,8 @@ from bgl import *
 #from OpenGL import GL
 
 volrender_program = None
-volrender_ramptext = None
-volrender_texture = None
+volrender_ramptext = Buffer(GL_INT, [1])
+volrender_texture = Buffer(GL_INT, [1])
 
 rampColors = 256
 step  = 1.0 / (rampColors - 1.0)
@@ -71,11 +71,11 @@ def addCube():
     
     # Create new cube
     bpy.ops.mesh.primitive_cube_add(location=(0,3,0))
-    ob = bpy.context.object
-    ob.name = 'VolCube'
+    cube = bpy.context.object
+    cube.name = 'VolCube'
 
     # Add material to current object
-    me = ob.data
+    me = cube.data
     me.materials.append(mat)
 
 #    I think my version is easier.
@@ -87,43 +87,8 @@ def addCube():
 #    bme.to_mesh(vol_cube)
 #    context.scene.objects.link(cube)
 #    bme.free()
-    return (ob, mat)
+    return (cube, mat)
 
-
-def initColorRamp(program):
-    # Compositor need to be activated first before we can access the nodes.
-    bpy.context.scene.use_nodes = True
-
-    scene = bpy.context.scene
-    nodes = scene.node_tree.nodes
-
-    # Check if there already a color ramp is existing.
-    if not "ColorRamp" in nodes:
-        nodes.new("CompositorNodeValToRGB")
-
-    pixels = Buffer(GL_FLOAT, [rampColors, 4])
-
-    global volrender_ramptext
-    
-    if volrender_ramptext == None:
-        rampTex = Buffer(GL_INT, [1])
-        glGenTextures(1, rampTex)
-    else:
-        rampTex = volrender_ramptext
-
-    glPixelStorei(GL_UNPACK_ALIGNMENT,1)
-    glBindTexture(GL_TEXTURE_1D, rampTex[0])
-    glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP)
-    glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-    glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-    glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA8, rampColors, 0, GL_RGBA, GL_FLOAT, pixels)
-    glBindTexture(GL_TEXTURE_1D, 0)
-
-    glUseProgram(program)
-    glUniform1i(28, rampTex[0])
-    glUseProgram(0)
-
-    return rampTex
 
 def update_colorRamp(ramp, rampTex, rampColors, step):
     pixels = Buffer(GL_FLOAT, [rampColors, 4])
@@ -137,18 +102,62 @@ def update_colorRamp(ramp, rampTex, rampColors, step):
     glActiveTexture(GL_TEXTURE0)
     
     # update viewport by setting the time line frame number
-    bpy.context.scene.frame_set(0)
+    bpy.context.area.tag_redraw()
+
+
+def initColorRamp(program):
+    global volrender_ramptext
+ 
+    # Compositor need to be activated first before we can access the nodes.
+    bpy.context.scene.use_nodes = True
+
+    scene = bpy.context.scene
+    nodes = scene.node_tree.nodes
+
+    # Check if there already a color ramp is existing.
+    if not "ColorRamp" in nodes:
+        nodes.new("CompositorNodeValToRGB")
+
+    pixels = Buffer(GL_FLOAT, [rampColors, 4])
+
+    if volrender_ramptext[0] == 0:
+        #rampTex = Buffer(GL_INT, [1])
+        glGenTextures(1, volrender_ramptext)
+    
+    glPixelStorei(GL_UNPACK_ALIGNMENT,1)
+    glBindTexture(GL_TEXTURE_1D, volrender_ramptext[0])
+    glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP)
+    glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA8, rampColors, 0, GL_RGBA, GL_FLOAT, pixels)
+    glBindTexture(GL_TEXTURE_1D, 0)
+
+    glUseProgram(program)
+    glUniform1i(28, volrender_ramptext[0])
+    glUseProgram(0)
+
+    # update the color ramp one time after init
+    cr_node = scene.node_tree.nodes['ColorRamp']
+    update_colorRamp(cr_node, volrender_ramptext[0], rampColors, step)
+
+    return volrender_ramptext
 
 
 def replaceShader(tex):
     program = None
 
-    # get last shader programm number.
+    # get shader program number depending on material index.
+    # Also not a save version. It is really tricky to get the right shade number. 
+    # After startup the program number depends on the material index increment by 3.
+    # If a new object is added (even without material) the shader number will be moved by 3.
+    # If an object will be deleted the number will not decrease until restart.
     #for i, mat in enumerate(bpy.data.materials):
     #    if mat.name == "VolumeMat":
     #        program = (i + 1) * 3
     #        break
   
+    # This is not a save. It always gets the last sahder number.
+    # The object must be the last added object.
     for prog in range(32767):
         if glIsProgram(prog) == True:
             program = prog
@@ -215,54 +224,48 @@ def replaceShader(tex):
 
     return program
 
+
 #
 # Property (uniform) update functions
 #
 def update_azimuth(self, context):
     #global volrender_program
-    #print(volrender_program)
     glUseProgram(volrender_program)
     glUniform1f(20, self.azimuth)
     glUseProgram(0)
  
 def update_elevation(self, context):
     #global volrender_program
-    #print(volrender_program)
     glUseProgram(volrender_program)
     glUniform1f(21, self.elevation) 
     glUseProgram(0)
     
 def update_clipPlaneDepth(self, context):
     #global volrender_program
-    #print(volrender_program)
     glUseProgram(volrender_program)
     glUniform1f(22, self.clipPlaneDepth) 
     glUseProgram(0)
 
 def update_clip(self, context):
     #global volrender_program
-    #print(volrender_program)
     glUseProgram(volrender_program)
     glUniform1f(23, self.clip)  
     glUseProgram(0)
 
 def update_dither(self, context):
     #global volrender_program
-    #print(volrender_program)
     glUseProgram(volrender_program)
     glUniform1f(24, self.dither) 
     glUseProgram(0)
 
 def update_opacityFactor(self, context):
     #global volrender_program
-    #print(volrender_program)
     glUseProgram(volrender_program)
     glUniform1f(25, self.opacityFactor) 
     glUseProgram(0)
 
 def update_lightFactor(self, context):
     #global volrender_program
-    #print(volrender_program)
     glUseProgram(volrender_program)
     glUniform1f(26, self.lightFactor) 
     glUseProgram(0)
@@ -375,13 +378,16 @@ class ImportImageVolume(Operator, ImportHelper):
        
         print('loading texture')
  
-        if volrender_texture == None:
-            volrender_texture = Buffer(GL_INT, [1])
+        if volrender_texture[0] == 0:
+            #volrender_texture = Buffer(GL_INT, [1])
             glGenTextures(1, volrender_texture)
 
         self.volume = loadVolume(self.filepath, volrender_texture[0])
         
         (width, height, depth) = self.volume
+
+        if not 'VolCube' in context.scene.objects:
+            addCube()
 
         print('added a cube and succsesfully created 3d OpenGL texture from Image Stack')
         print('the image id as retuned by glGenTextures is %i' % volrender_texture[0])
@@ -394,7 +400,7 @@ class ImportDICOMVoulme(Operator, ImportHelper):
     """Imports volume data stack"""
     bl_idname = "import_test.import_volume_dicom"  # important since its how bpy.ops.import_test.some_data is constructed
     bl_label = "Import Dicom Volume"
-
+ 
     # ImportHelper mixin class uses this
     filename_ext = ".dcm"
 
@@ -423,20 +429,22 @@ class ImportDICOMVoulme(Operator, ImportHelper):
         #if volrender_program != None:
         #    glDeleteProgram(volrender_program)
 
-        if volrender_texture == None:
+        if volrender_texture[0] == 0:
             #glDeleteTextures (1, volrender_texture)
-            volrender_texture = Buffer(GL_INT, [1])
+            #volrender_texture = Buffer(GL_INT, [1])
             glGenTextures(1, volrender_texture)
 
         self.volume = loadDCMVolume(self.filepath, volrender_texture[0])
         
         (width, height, depth) = self.volume
 
+        if not 'VolCube' in context.scene.objects:
+            addCube()
+
         print('added a cube and succsesfully created 3d OpenGL texture from DICOM stack')
         print('the image id as retuned by glGenTextures is %i' % volrender_texture[0])
         
         return {'FINISHED'}
-
 
 
 class ShaderReplace(Operator):
@@ -449,49 +457,24 @@ class ShaderReplace(Operator):
         global volrender_texture
         global volrender_ramptext
 
-        ########  TEMPORARY GRABS CUBE WITH EXISTING TEXTURE    ####
-        ########  Will be replaced with code to generate a cube ####
-        #and attach texture/shader program
-        
-#        if not context.object:
-#            self.report({'ERROR'},"An object must be selected")
-#            
-#        if not context.object.name == 'Vol Cube':
-#            self.report({'ERROR'},"Object must be a cube")
-#        
-#        if not len(context.object.material_slots) == 1:
-#            self.report({'ERROR'},"Cube should only have 1 material slot")
-        
-        #mat = context.object.material_slots[0].material
-        
-        ########  END TEMPORARY CODE SEGMENT ####
-        
-        #identify the cube as a volume object
- #       is_volume = context.object.get('is_volume', False)
- #       if not is_volume:
- #           context.object.is_volume = True
-        obj, mat = addCube()
-
         #Control settings
         context.user_preferences.system.use_mipmaps = False
         context.scene.game_settings.material_mode = 'GLSL'
-        
-        volrender_program = replaceShader(volrender_texture[0])
-        print("prog ", volrender_program)
-        if volrender_program != None:
-            volrender_ramptext = initColorRamp(volrender_program)
 
-            print('program ', volrender_program, '  texture ', volrender_texture[0], '  rampText ', volrender_ramptext[0])
-      
-        #will comment these out because can't get to obj
-        #data at registration time
-        update_azimuth(context.object, bpy.context)
-        update_elevation(context.object, bpy.context)
-        update_clipPlaneDepth(context.object, bpy.context)
-        update_clip(context.object, bpy.context)
-        update_dither(context.object, bpy.context)
-        update_opacityFactor(context.object, bpy.context)
-        update_lightFactor(context.object, bpy.context)
+        volrender_program = replaceShader(volrender_texture[0])
+        print ("prog ",volrender_program)
+        volrender_ramptext = initColorRamp(volrender_program)
+
+        print('program ', volrender_program, '  texture ', volrender_texture[0], '  rampText ', volrender_ramptext[0])
+
+        obj = context.object      
+        update_azimuth(obj, bpy.context)
+        update_elevation(obj, bpy.context)
+        update_clipPlaneDepth(obj, bpy.context)
+        update_clip(obj, bpy.context)
+        update_dither(obj, bpy.context)
+        update_opacityFactor(obj, bpy.context)
+        update_lightFactor(obj, bpy.context)
         
         return {'FINISHED'}
 
@@ -518,22 +501,10 @@ class UIPanel(bpy.types.Panel):
         global volrender_ramptext
         
         layout = self.layout
-        scene = bpy.context.scene
-        
-        if context.object == None:
-            return
-
+        scene = context.scene
         obj = context.object
-        
-        #use get to try and access custom property
-        #if it's not there...go on happily!
-#        is_volume = obj.get('is_volume', False)
-#        if not is_volume: 
-#            row = layout.row()
-#            row.label(text = "Not a Volume Data Object")
-#            return
 
-        if volrender_ramptext != None:
+        if volrender_ramptext != -1 and obj != None and obj.name == 'VolCube':
             layout.prop(obj, 'azimuth')
             layout.prop(obj, 'elevation')
             layout.prop(obj, 'clipPlaneDepth')
@@ -565,10 +536,11 @@ def unregister():
     global volrender_texture 
     global volrender_ramptext 
 
-    if volrender_ramptext != None:
+    if volrender_ramptext != -1:
         glDeleteTextures (1, volrender_ramptext)
 
-    if volrender_texture != None:
+    if volrender_texture != -1:
         glDeleteTextures (1, volrender_texture)
 
-
+if __name__ == "__main__":
+    register()

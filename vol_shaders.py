@@ -180,11 +180,11 @@ void main()
         value = vec4(tf_pos);
 
         // Process the volume sample
-        sample.a = value.a * opacityFactor * (1.0/float(numSamples));
-        value.rgb = texture1D(ramp, sample.a).rgb;
-        sample.rgb = value.rgb * sample.a * lightFactor;
-        accum.rgb += (1.0 - accum.a) * sample.rgb;
-        accum.a += sample.a;
+		sample.a = value.a * opacityFactor * (1.0/float(numSamples));
+		value = texture1D(ramp, sample.a);
+		sample.rgb = value.rgb * sample.a * lightFactor;
+		accum.rgb += (1.0 - accum.a) * sample.rgb;
+		accum.a += sample.a * value.a;
 
         if(accum.a>=1.0)
         break;
