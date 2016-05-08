@@ -62,13 +62,17 @@ volrender_texture = Buffer(GL_INT, [1])
 
 rampColors = 256
 step  = 1.0 / (rampColors - 1.0)
+updateProgram = 0
 
 # Helper functions
 def addCube():
     # Create material
-    mat = bpy.data.materials.new('VolumeMat')
-    mat.use_transparency = True
-    
+    if not 'VolumeMat' in bpy.data.materials:
+        mat = bpy.data.materials.new('VolumeMat')
+        mat.use_transparency = True
+    else:
+        mat = bpy.data.materials['VolumeMat']
+
     # Create new cube
     bpy.ops.mesh.primitive_cube_add(location=(0,3,0))
     cube = bpy.context.object
@@ -90,19 +94,27 @@ def addCube():
     return (cube, mat)
 
 
-def update_colorRamp(ramp, rampTex, rampColors, step):
+def update_colorRamp():
+    global volrender_ramptext, rampColors, step
+
+    cr_node = bpy.data.scenes[0].node_tree.nodes['ColorRamp']
     pixels = Buffer(GL_FLOAT, [rampColors, 4])
 
     for x in range(0, rampColors):
-       pixels[x] = ramp.color_ramp.evaluate(x * step)
+       pixels[x] = cr_node.color_ramp.evaluate(x * step)
 
-    glActiveTexture(GL_TEXTURE0 + rampTex)
-    glBindTexture(GL_TEXTURE_1D, rampTex)
+    glActiveTexture(GL_TEXTURE0 + volrender_ramptext[0])
+    glBindTexture(GL_TEXTURE_1D, volrender_ramptext[0])
     glTexSubImage1D(GL_TEXTURE_1D, 0, 0, rampColors, GL_RGBA, GL_FLOAT, pixels)
     glActiveTexture(GL_TEXTURE0)
     
-    # update viewport by setting the time line frame number
-    bpy.context.area.tag_redraw()
+    # update Viewport By stteing the time line frame
+#   bpy.data.scenes[0].update_tag()
+#   bpy.data.scenes[0].update()
+#   bpy.context.area.tag_redraw()
+    for area in bpy.context.screen.areas:
+        if area.type in ['IMAGE_EDITOR', 'VIEW_3D']:
+            area.tag_redraw()
 
 
 def initColorRamp(program):
@@ -121,7 +133,6 @@ def initColorRamp(program):
     pixels = Buffer(GL_FLOAT, [rampColors, 4])
 
     if volrender_ramptext[0] == 0:
-        #rampTex = Buffer(GL_INT, [1])
         glGenTextures(1, volrender_ramptext)
     
     glPixelStorei(GL_UNPACK_ALIGNMENT,1)
@@ -137,14 +148,13 @@ def initColorRamp(program):
     glUseProgram(0)
 
     # update the color ramp one time after init
-    cr_node = scene.node_tree.nodes['ColorRamp']
-    update_colorRamp(cr_node, volrender_ramptext[0], rampColors, step)
+    update_colorRamp()
 
     return volrender_ramptext
 
 
 def replaceShader(tex):
-    program = None
+    program = 3
 
     # get shader program number depending on material index.
     # Also not a save version. It is really tricky to get the right shade number. 
@@ -221,6 +231,10 @@ def replaceShader(tex):
         glUniform1i(27, tex)
         glUseProgram(0)
         glActiveTexture(GL_TEXTURE0)
+
+    for area in bpy.context.screen.areas:
+        if area.type in ['IMAGE_EDITOR', 'VIEW_3D']:
+            area.tag_redraw()
 
     return program
 
@@ -379,7 +393,6 @@ class ImportImageVolume(Operator, ImportHelper):
         print('loading texture')
  
         if volrender_texture[0] == 0:
-            #volrender_texture = Buffer(GL_INT, [1])
             glGenTextures(1, volrender_texture)
 
         self.volume = loadVolume(self.filepath, volrender_texture[0])
@@ -411,7 +424,6 @@ class ImportDICOMVoulme(Operator, ImportHelper):
 
     # List of operator properties, the attributes will be assigned
     # to the class instance from the operator settings before calling.
-
     max_slices = IntProperty(
             name="Max Slices",
             description="will only import up to this many slices",
@@ -425,13 +437,8 @@ class ImportDICOMVoulme(Operator, ImportHelper):
             )
     def execute(self,context):
         global volrender_texture
-        
-        #if volrender_program != None:
-        #    glDeleteProgram(volrender_program)
 
         if volrender_texture[0] == 0:
-            #glDeleteTextures (1, volrender_texture)
-            #volrender_texture = Buffer(GL_INT, [1])
             glGenTextures(1, volrender_texture)
 
         self.volume = loadDCMVolume(self.filepath, volrender_texture[0])
@@ -516,7 +523,27 @@ class UIPanel(bpy.types.Panel):
             cr_node = scene.node_tree.nodes['ColorRamp']
             layout.template_color_ramp(cr_node, "color_ramp", expand=True)
 
-            update_colorRamp(cr_node, volrender_ramptext[0], rampColors, step)
+
+def scene_update(context):
+    global updateProgram
+    global updateProgram
+
+    if bpy.data.materials.is_updated:
+        if bpy.data.materials['VolumeMat'].is_updated:
+            print("update2")
+            updateProgram = 3
+
+        if hasattr(bpy.data.scenes[0].node_tree, 'is_updated'):
+            if bpy.data.scenes[0].node_tree.is_updated:
+                update_colorRamp()
+
+    # shader update delay 
+    if updateProgram > 0:
+        updateProgram -= 1
+
+    if updateProgram == 1:
+        print("update3")
+        replaceShader(volrender_texture[0])
 
 
 def register():
@@ -526,12 +553,15 @@ def register():
     bpy.utils.register_class(ImportImageVolume)
     bpy.utils.register_class(ShaderReplace)
     bpy.utils.register_class(UIPanel)
+    bpy.app.handlers.scene_update_post.append(scene_update)
+
 
 def unregister():
     bpy.utils.unregister_class(ImportDICOMVoulme)
     bpy.utils.unregister_class(ImportImageVolume)
     bpy.utils.unregister_class(ShaderReplace)
     bpy.utils.unregister_class(UIPanel)
+    bpy.app.handlers.scene_update_post.remove(scene_update)
      
     global volrender_texture 
     global volrender_ramptext 
