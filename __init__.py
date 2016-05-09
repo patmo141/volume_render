@@ -66,6 +66,10 @@ updateProgram = 0
 
 # Helper functions
 def addCube():
+    #Control settings
+    bpy.context.user_preferences.system.use_mipmaps = False
+    bpy.context.scene.game_settings.material_mode = 'GLSL'
+
     # Create material
     if not 'VolumeMat' in bpy.data.materials:
         mat = bpy.data.materials.new('VolumeMat')
@@ -113,7 +117,7 @@ def update_colorRamp():
 #   bpy.data.scenes[0].update()
 #   bpy.context.area.tag_redraw()
     for area in bpy.context.screen.areas:
-        if area.type in ['IMAGE_EDITOR', 'VIEW_3D']:
+        if area.type in ['VIEW_3D']:
             area.tag_redraw()
 
 
@@ -154,7 +158,7 @@ def initColorRamp(program):
 
 
 def replaceShader(tex):
-    program = 3
+    program = None
 
     # get shader program number depending on material index.
     # Also not a save version. It is really tricky to get the right shade number. 
@@ -231,10 +235,6 @@ def replaceShader(tex):
         glUniform1i(27, tex)
         glUseProgram(0)
         glActiveTexture(GL_TEXTURE0)
-
-    for area in bpy.context.screen.areas:
-        if area.type in ['IMAGE_EDITOR', 'VIEW_3D']:
-            area.tag_redraw()
 
     return program
 
@@ -353,7 +353,7 @@ class ImportImageVolume(Operator, ImportHelper):
     filename_ext = ".tif"
  
     filter_glob = StringProperty(
-            default="*.tif; *.jpg; *.png",
+            default="*.tif;*.jpg;*.png",
             options={'HIDDEN'},
             )
 
@@ -464,25 +464,20 @@ class ShaderReplace(Operator):
         global volrender_texture
         global volrender_ramptext
 
-        #Control settings
-        context.user_preferences.system.use_mipmaps = False
-        context.scene.game_settings.material_mode = 'GLSL'
+        if 'VolCube' in bpy.data.objects:
+            volrender_program = replaceShader(volrender_texture[0])
+            volrender_ramptext = initColorRamp(volrender_program)
+            #print('program ', volrender_program, '  texture ', volrender_texture[0], '  rampText ', volrender_ramptext[0])
 
-        volrender_program = replaceShader(volrender_texture[0])
-        print ("prog ",volrender_program)
-        volrender_ramptext = initColorRamp(volrender_program)
+            obj = context.object      
+            update_azimuth(obj, bpy.context)
+            update_elevation(obj, bpy.context)
+            update_clipPlaneDepth(obj, bpy.context)
+            update_clip(obj, bpy.context)
+            update_dither(obj, bpy.context)
+            update_opacityFactor(obj, bpy.context)
+            update_lightFactor(obj, bpy.context)
 
-        print('program ', volrender_program, '  texture ', volrender_texture[0], '  rampText ', volrender_ramptext[0])
-
-        obj = context.object      
-        update_azimuth(obj, bpy.context)
-        update_elevation(obj, bpy.context)
-        update_clipPlaneDepth(obj, bpy.context)
-        update_clip(obj, bpy.context)
-        update_dither(obj, bpy.context)
-        update_opacityFactor(obj, bpy.context)
-        update_lightFactor(obj, bpy.context)
-        
         return {'FINISHED'}
 
 #
@@ -511,7 +506,7 @@ class UIPanel(bpy.types.Panel):
         scene = context.scene
         obj = context.object
 
-        if volrender_ramptext != -1 and obj != None and obj.name == 'VolCube':
+        if volrender_ramptext[0] != 0 and obj != None and obj.name == 'VolCube':
             layout.prop(obj, 'azimuth')
             layout.prop(obj, 'elevation')
             layout.prop(obj, 'clipPlaneDepth')
@@ -529,9 +524,9 @@ def scene_update(context):
     global updateProgram
 
     if bpy.data.materials.is_updated:
-        if bpy.data.materials['VolumeMat'].is_updated:
-            print("update2")
-            updateProgram = 3
+        #if bpy.data.materials['VolumeMat'].is_updated:
+        #    print("update2")
+        #    updateProgram = 10
 
         if hasattr(bpy.data.scenes[0].node_tree, 'is_updated'):
             if bpy.data.scenes[0].node_tree.is_updated:
@@ -545,6 +540,11 @@ def scene_update(context):
         print("update3")
         replaceShader(volrender_texture[0])
 
+        for area in bpy.context.screen.areas:
+            if area.type in ['VIEW_3D']:
+                area.tag_redraw()
+
+    print(updateProgram)
 
 def register():
     initObjectProperties()
