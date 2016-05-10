@@ -544,7 +544,6 @@ def scene_update(context):
             if area.type in ['VIEW_3D']:
                 area.tag_redraw()
 
-    print(updateProgram)
 
 def register():
     initObjectProperties()

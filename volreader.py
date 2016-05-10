@@ -7,9 +7,10 @@ function modified for dicom support
 """
 
 import os
-from PIL import Image
-from pydicom import read_file
+import bpy
 from bgl import *
+#from PIL import Image
+from volume_render.pydicom import read_file
  
 def loadVolume(dirName, texture):
     """read volume from directory as a 3D texture"""
@@ -20,25 +21,30 @@ def loadVolume(dirName, texture):
     width, height = 0, 0
     for file in files:
         file_path = os.path.abspath(os.path.join(dirName, file))
-        try:
-            # read image
-            img = Image.open(file_path)
+#        try:
+        # read image
+        bpy.ops.image.open(filepath=file_path)
+        #img = Image.open(file_path)
+        imgData = bpy.data.images[depth]
 
-             # check if all are of the same size
-            if depth is 0:
-                width, height = img.size[0], img.size[1] 
-                data = Buffer(GL_BYTE, [len(files), width * height])
-                data[depth] = img.getdata()
+         # check if all are of the same size
+        if depth is 0:
+            width, height = imgData.size
+            #width, height = img.size[0], img.size[1] 
+            data = Buffer(GL_FLOAT, [len(files), width * height])
+            #data[depth] = img.getdata()
+            data[depth] = list(imgData.pixels)[::4]
+        else:
+            if (width, height) == (imgData.size[0], imgData.size[1]):
+                #data[depth] = img.getdata()
+                data[depth] = list(imgData.pixels)[::4]
             else:
-                if (width, height) == (img.size[0], img.size[1]):
-                   data[depth] = img.getdata()
-                else:
-                    print('mismatch')
-                    raise RunTimeError("image size mismatch")
-            depth += 1
-        except:
+                print('mismatch')
+                raise RunTimeError("image size mismatch")
+        depth += 1
+#        except:
             # skip
-            print('Invalid image: %s' % file_path)
+            #print('Invalid image: %s' % file_path)
 
     # load image data into single array
     print('volume data dims: %d %d %d' % (width, height, depth))
@@ -52,7 +58,8 @@ def loadVolume(dirName, texture):
     glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
     glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
     glTexImage3D(GL_TEXTURE_3D, 0, GL_RED, width, height, depth, 0, 
-                 GL_RED, GL_UNSIGNED_BYTE, data)
+                 GL_RED, GL_FLOAT, data)
+
     #return texture
     return (width, height, depth)
 
