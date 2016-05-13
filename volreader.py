@@ -23,9 +23,8 @@ def loadVolume(dirName, texture):
         file_path = os.path.abspath(os.path.join(dirName, file))
 #        try:
         # read image
-        bpy.ops.image.open(filepath=file_path)
-        #img = Image.open(file_path)
-        imgData = bpy.data.images[depth]
+        #imgData = Image.open(file_path)
+        imgData = bpy.data.images.load(file_path)
 
          # check if all are of the same size
         if depth is 0:
@@ -42,6 +41,9 @@ def loadVolume(dirName, texture):
                 print('mismatch')
                 raise RunTimeError("image size mismatch")
         depth += 1
+
+        bpy.data.images.remove(imgData)
+
 #        except:
             # skip
             #print('Invalid image: %s' % file_path)

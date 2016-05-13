@@ -291,11 +291,6 @@ def update_lightFactor(self, context):
 
   
 def initObjectProperties():
-    bpy.types.Object.is_volume = BoolProperty(
-        name = "Is Volume",
-        default = False,
-        description = "Object container for volume?")
-    
     bpy.types.Object.clip = BoolProperty(
         name = "Clip",
         default = False,
@@ -353,6 +348,7 @@ class ImportImageVolume(Operator, ImportHelper):
     """Imports and then clears volume data"""
     bl_idname = "import_test.import_volume_image"  # important since its how bpy.ops.import_test.some_data is constructed
     bl_label = "Import Image Volume"
+    bl_description = "Import image slices"
 
     # ImportHelper mixin class uses this
     filename_ext = ".tif"
@@ -418,6 +414,7 @@ class ImportDICOMVoulme(Operator, ImportHelper):
     """Imports volume data stack"""
     bl_idname = "import_test.import_volume_dicom"  # important since its how bpy.ops.import_test.some_data is constructed
     bl_label = "Import Dicom Volume"
+    bl_description = "Import DICOM image slices"
  
     # ImportHelper mixin class uses this
     filename_ext = ".dcm"
@@ -463,6 +460,7 @@ class ShaderReplace(Operator):
     """Attaches volume texture and replaces shader of object"""
     bl_idname = "volume_render.replace_shader"  # important since its how bpy.ops.import_test.some_data is constructed
     bl_label = "Replace Shader"
+    bl_description = "Render or update the volume"
 
     def execute(self,context):
         global volrender_program
@@ -510,6 +508,10 @@ class UIPanel(bpy.types.Panel):
         layout = self.layout
         scene = context.scene
         obj = context.object
+
+        layout.operator('import_test.import_volume_image', text="Import Image Volume")
+        layout.operator('import_test.import_volume_dicom', text="Import DICOM Voulme")
+        layout.operator('volume_render.replace_shader', text="Update Volume")
 
         if volrender_ramptext[0] != 0 and obj != None and obj.name == 'VolCube':
             layout.prop(obj, 'azimuth')
@@ -566,7 +568,15 @@ def unregister():
     bpy.utils.unregister_class(ShaderReplace)
     bpy.utils.unregister_class(UIPanel)
     bpy.app.handlers.scene_update_post.remove(scene_update)
-     
+
+    del bpy.types.Object.clip 
+    del bpy.types.Object.dither
+    del bpy.types.Object.azimuth
+    del bpy.types.Object.elevation
+    del bpy.types.Object.clipPlaneDepth
+    del bpy.types.Object.opacityFactor
+    del bpy.types.Object.lightFactor
+    
     global volrender_texture 
     global volrender_ramptext 
 
