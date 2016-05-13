@@ -34,6 +34,11 @@ bl_info = {
     "category":    "3D View"
     }
 
+import sys
+
+if not __path__[0] in sys.path:
+    sys.path.append(__path__[0])
+
 # Blender imports
 import bpy
 #import bmesh
