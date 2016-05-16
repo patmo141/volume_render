@@ -74,11 +74,14 @@ def addCube():
     #Control settings
     bpy.context.user_preferences.system.use_mipmaps = False
     bpy.context.scene.game_settings.material_mode = 'GLSL'
+    bpy.context.space_data.viewport_shade = 'TEXTURED'
+
 
     # Create material
     if not 'VolumeMat' in bpy.data.materials:
         mat = bpy.data.materials.new('VolumeMat')
         mat.use_transparency = True
+        mat.use_shadeless = True
     else:
         mat = bpy.data.materials['VolumeMat']
 
@@ -90,6 +93,8 @@ def addCube():
     # Add material to current object
     me = cube.data
     me.materials.append(mat)
+
+    addColorRamp()
 
 #    I think my version is easier.
 #    bme = bmesh.new()
@@ -125,20 +130,20 @@ def update_colorRamp():
         if area.type in ['VIEW_3D']:
             area.tag_redraw()
 
-
-def initColorRamp(program):
-    global volrender_ramptext
- 
+def addColorRamp():
     # Compositor need to be activated first before we can access the nodes.
     bpy.context.scene.use_nodes = True
 
-    scene = bpy.context.scene
-    nodes = scene.node_tree.nodes
+    nodes = bpy.context.scene.node_tree.nodes
 
     # Check if there already a color ramp is existing.
     if not "ColorRamp" in nodes:
         nodes.new("CompositorNodeValToRGB")
+        nodes['ColorRamp'].color_ramp.elements[0].color[3] = 0.0
 
+def initColorRamp(program):
+    global volrender_ramptext
+ 
     pixels = Buffer(GL_FLOAT, [rampColors, 4])
 
     if volrender_ramptext[0] == 0:
@@ -533,16 +538,14 @@ def scene_update(context):
     if bpy.data.materials.is_updated:
         #if bpy.data.materials['VolumeMat'].is_updated:
         #    print("update2")
-        #    updateProgram = 10
+        #    updateProgram = 3
 
         if hasattr(bpy.data.scenes[0].node_tree, 'is_updated'):
             if bpy.data.scenes[0].node_tree.is_updated:
+                #print("update")
                 update_colorRamp()
 
     # shader update delay 
-    if updateProgram > 0:
-        updateProgram -= 1
-
     if updateProgram == 1:
         print("update3")
         replaceShader(volrender_texture[0])
@@ -550,6 +553,9 @@ def scene_update(context):
         for area in bpy.context.screen.areas:
             if area.type in ['VIEW_3D']:
                 area.tag_redraw()
+
+    if updateProgram > 0:
+        updateProgram -= 1
 
 
 def register():
@@ -559,6 +565,8 @@ def register():
     bpy.utils.register_class(ImportImageVolume)
     bpy.utils.register_class(ShaderReplace)
     bpy.utils.register_class(UIPanel)
+    if "scene_update" in bpy.app.handlers.scene_update_post:
+        bpy.app.handlers.scene_update_post.remove(scene_update)
     bpy.app.handlers.scene_update_post.append(scene_update)
 
 
@@ -567,7 +575,8 @@ def unregister():
     bpy.utils.unregister_class(ImportImageVolume)
     bpy.utils.unregister_class(ShaderReplace)
     bpy.utils.unregister_class(UIPanel)
-    bpy.app.handlers.scene_update_post.remove(scene_update)
+    if "scene_update" in bpy.app.handlers.scene_update_post:
+        bpy.app.handlers.scene_update_post.remove(scene_update)
 
     del bpy.types.Object.clip 
     del bpy.types.Object.dither

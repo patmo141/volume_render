@@ -78,32 +78,6 @@ vec3 p2cart(float azimuth, float elevation)
     return vec3( x, z, y );
 }
 
-float tex3D(sampler2D texture, vec3 volpos)
-{
-    float s1,s2;
-    float dx1,dy1;
-    float dx2,dy2;
-
-    vec2 texpos1,texpos2;
-
-    s1 = floor(volpos.z*numberOfSlices);
-    s2 = s1+1.0;
-
-    dx1 = fract(s1/slicesOverX);
-    dy1 = floor(s1/slicesOverY)/slicesOverY;
-
-    dx2 = fract(s2/slicesOverX);
-    dy2 = floor(s2/slicesOverY)/slicesOverY;
-    
-    texpos1.x = dx1+(volpos.x/slicesOverX);
-    texpos1.y = dy1+(volpos.y/slicesOverY);
-
-    texpos2.x = dx2+(volpos.x/slicesOverX);
-    texpos2.y = dy2+(volpos.y/slicesOverY);
-
-    return mix(texture2D(texture,texpos1).x, texture2D(texture,texpos2).x, (volpos.z*numberOfSlices)-s1);
-}
-
 void main()
 {
     vec3 clipPlane = p2cart(azimuth, elevation);
@@ -141,7 +115,7 @@ void main()
         float dis = dot(dir,clipPlane);
 
         if (dis != 0.0 )
-            dis = (-clipPlaneDepth - dot(clipPlane, rayStart.xyz-0.5)) / dis;
+            dis = (-clipPlaneDepth - dot(clipPlane, rayStart.xyz - 0.5)) / dis;
 
         if ((!frontface) && (dis < 0.0))
             return;
@@ -177,17 +151,16 @@ void main()
         float tf_pos;
 
         tf_pos = texture3D(tex, pos).x;   
-        value = vec4(tf_pos);
+		value = texture1D(ramp, tf_pos);
 
         // Process the volume sample
-		sample.a = value.a * opacityFactor * (1.0/float(numSamples));
-		value = texture1D(ramp, sample.a);
+		sample.a = value.a * opacityFactor * (1.0 / float(numSamples));
 		sample.rgb = value.rgb * sample.a * lightFactor;
 		accum.rgb += (1.0 - accum.a) * sample.rgb;
-		accum.a += sample.a * value.a;
+		accum.a += sample.a;
 
-        if(accum.a>=1.0)
-        break;
+        if(accum.a >= 1.0)
+            break;
     }
 
     gl_FragColor.rgb = accum.rgb;
