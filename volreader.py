@@ -12,15 +12,25 @@ from bgl import *
 #from PIL import Image
 from volume_render.pydicom import read_file
  
-def loadVolume(dirName, texture):
+def loadVolume(dirName, filelist, texture):
     """read volume from directory as a 3D texture"""
     # list images in directory
-    files = sorted(os.listdir(dirName))
+    #dirname = os.path.dirname(dirName)
+
+    if filelist[0].name == "":
+        files = sorted(os.listdir(dirName))
+    else:
+        files = filelist
+
     print('loading mages from: %s' % dirName)
+
     depth = 0
     width, height = 0, 0
     for file in files:
-        file_path = os.path.abspath(os.path.join(dirName, file))
+        if hasattr(file, 'name'):
+            file_path = os.path.abspath(os.path.join(dirName, file.name))
+        else:
+            file_path = os.path.abspath(os.path.join(dirName, file))
 #        try:
         # read image
         #imgData = Image.open(file_path)
@@ -67,21 +77,32 @@ def loadVolume(dirName, texture):
 
 
 
-def loadDCMVolume(dirName, texture):
+def loadDCMVolume(dirName, filelist, texture):
     """read dcm volume from directory as a 3D texture"""
     # list images in directory
-    files = sorted(os.listdir(dirName))
+    if filelist[0].name == "":
+        files = sorted(os.listdir(dirName))
+    else:
+        files = filelist
+
     print('loading mages from: %s' % dirName)
-    imgDataList = []
+
     depth = 0
     width, height = 0, 0
     for file in files:
         #skip non dcm files
-        if not file.endswith(".dcm"): 
-            print('skipping junk file: ' + file)
-            continue
-        file_path = os.path.abspath(os.path.join(dirName, file))
-#        try:
+        if hasattr(file, 'name'):
+            if not file.name.endswith(".dcm"): 
+                print('skipping junk file: ' + file)
+                continue
+            file_path = os.path.abspath(os.path.join(dirName, file.name))
+        else:
+            if not file.endswith(".dcm"): 
+                print('skipping junk file: ' + file)
+                continue
+            file_path = os.path.abspath(os.path.join(dirName, file))
+
+ #        try:
         # read image
         ds = read_file(file_path)
         img_size = ds.pixel_array.shape
