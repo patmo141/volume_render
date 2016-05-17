@@ -62,7 +62,7 @@ step  = 1.0 / (rampColors - 1.0)
 updateProgram = 0
 
 # Helper functions
-def addCube():
+def addCube(pixelDimsX, pixelDimsY, pixelDimsZ, pixelSpacingX, pixelSpacingY, pixelSpacingZ):
     #Control settings
     bpy.context.user_preferences.system.use_mipmaps = False
     bpy.context.scene.game_settings.material_mode = 'GLSL'
@@ -79,7 +79,11 @@ def addCube():
     bpy.ops.mesh.primitive_cube_add(location=(0,3,0))
     cube = bpy.context.object
     cube.name = 'VolCube'
-    cube.scale = (1.0, 1.0, 1.0)
+
+    cube.scale = (pixelDimsX * pixelSpacingX / 100.0, 
+                  pixelDimsY * pixelSpacingY / 100.0, 
+                  pixelDimsZ * pixelSpacingZ / 100.0)
+
 
     # Add material to current object
     me = cube.data
@@ -339,7 +343,7 @@ class ImportImageVolume(Operator, ImportHelper):
     filename_ext = ".tif"
  
     filter_glob = StringProperty(
-            default="*.tif;*.jpg;*.png;*.dcm",
+            default="*.tif;*.jpg;*.png",
             options={'HIDDEN'},
             )
 
@@ -390,12 +394,13 @@ class ImportImageVolume(Operator, ImportHelper):
         if volrender_texture[0] == 0:
             glGenTextures(1, volrender_texture)
 
-        self.volume = loadVolume(self.directory, self.files, volrender_texture[0])
+        volume = loadVolume(self.directory, self.files, volrender_texture[0])
         
-        (width, height, depth) = self.volume
 
         if not 'VolCube' in context.scene.objects:
-            addCube()
+            addCube(float(volume[0]), float(volume[1]), float(volume[2]),
+                    fpix_width, pix_height, slice_thickness)
+
 
         #print('added a cube and succsesfully created 3d OpenGL texture from Image Stack')
         #print('the image id as retuned by glGenTextures is %i' % volrender_texture[0])
@@ -440,18 +445,18 @@ class ImportDICOMVoulme(Operator, ImportHelper):
             description="will start with this slice",
             default= 0,
             )
+
     def execute(self,context):
         global volrender_texture
 
         if volrender_texture[0] == 0:
             glGenTextures(1, volrender_texture)
 
-        self.volume = loadDCMVolume(self.directory, self.files, volrender_texture[0])
-        
-        (width, height, depth) = self.volume
+        volume = loadDCMVolume(self.directory, self.files, volrender_texture[0])
 
         if not 'VolCube' in context.scene.objects:
-            addCube()
+            addCube(float(volume[0]), float(volume[1]), float(volume[2]),
+                    float(volume[3]), float(volume[4]), float(volume[5]))
 
         #print('added a cube and succsesfully created 3d OpenGL texture from DICOM stack')
         #print('the image id as retuned by glGenTextures is %i' % volrender_texture[0])

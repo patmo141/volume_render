@@ -106,16 +106,18 @@ def loadDCMVolume(dirName, filelist, texture):
         # read image
         ds = read_file(file_path)
         img_size = ds.pixel_array.shape
-        imgData = ds.PixelData
+        imgData = ds.pixel_array.flat.copy().astype("f")
+        #imgData = ds.PixelData
 
         # check if all are of the same size
         if depth is 0:
             width, height = img_size[0], img_size[1] 
-            data = Buffer(GL_BYTE, [len(files), width * height])
-            data[depth] = imgData[::2]
+            data = Buffer(GL_FLOAT, [len(files), width * height])
+            data[depth] = imgData/max(imgData)
         else:
             if (width, height) == (img_size[0], img_size[1]):
-                data[depth] = imgData[::2]
+                #data[depth] = imgData[::2]
+                data[depth] = imgData/max(imgData)
             else:
                 print('mismatch')
                 raise RunTimeError("image size mismatch")
@@ -136,9 +138,9 @@ def loadDCMVolume(dirName, filelist, texture):
     glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
     glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
     glTexImage3D(GL_TEXTURE_3D, 0,  GL_RED, width, height, depth, 0, 
-                 GL_RED,  GL_UNSIGNED_BYTE, data)
-    
-    return (width, height, depth)
+                 GL_RED,  GL_FLOAT, data)
+
+    return (width, height, depth, float(ds.PixelSpacing[0]), float(ds.PixelSpacing[1]), float(ds.SliceThickness))
 
 # load texture
 def loadTexture(filename):
