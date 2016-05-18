@@ -49,8 +49,8 @@ from bpy.props import StringProperty, BoolProperty, EnumProperty, IntProperty, F
 from bpy.types import Operator
 
 #custom structures from volume render
-from .volreader import loadVolume, loadDCMVolume
-from .vol_shaders import vs, fs
+#from .volreader import loadVolume, loadDCMVolume
+#from .vol_shaders import vs, fs
 from bgl import *
 
 volrender_program = None
@@ -60,6 +60,335 @@ volrender_texture = Buffer(GL_INT, [1])
 rampColors = 256
 step  = 1.0 / (rampColors - 1.0)
 updateProgram = 0
+
+#
+# Shader
+#
+#""" this line is needed for syntax high lighting in Notepad++.
+
+vs = """
+varying vec3 pos;
+
+void main()
+{
+    gl_Position = ftransform();
+    pos = vec3(gl_Vertex);
+}
+"""
+
+fs = """
+#version 330 compatibility
+#extension GL_ARB_explicit_uniform_location : require
+
+layout(location = 20) uniform float azimuth;
+layout(location = 21) uniform float elevation;
+layout(location = 22) uniform float clipPlaneDepth; //clipping plane variables
+layout(location = 23) uniform bool clip;
+layout(location = 24) uniform bool dither;
+layout(location = 25) uniform float opacityFactor;
+layout(location = 26) uniform float lightFactor;
+layout(location = 27) uniform sampler3D tex;
+layout(location = 28) uniform sampler1D ramp;
+
+varying vec3 pos;
+
+const float maxDist = sqrt(2.0);
+const int numSamples = 256;
+const float stepSize = maxDist/float(numSamples);
+
+const float numberOfSlices = 96.0;
+const float slicesOverX = -10.0;
+const float slicesOverY = 10.0;
+
+struct Ray 
+{
+    vec3 Origin;
+    vec3 Dir;
+};
+
+struct AABB 
+{
+    vec3 Min;
+    vec3 Max;
+};
+
+bool IntersectBox(Ray r, AABB aabb, out float t0, out float t1)
+{
+    vec3 invR = 1.0 / r.Dir;
+    vec3 tbot = invR * (aabb.Min-r.Origin);
+    vec3 ttop = invR * (aabb.Max-r.Origin);
+    vec3 tmin = min(ttop, tbot);
+    vec3 tmax = max(ttop, tbot);
+    vec2 t = max(tmin.xx, tmin.yz);
+    t0 = max(t.x, t.y);
+    t = min(tmax.xx, tmax.yz);
+    t1 = min(t.x, t.y);
+    return t0 <= t1;
+}
+
+vec3 p2cart(float azimuth, float elevation)
+{
+    float pi = 3.14159;
+    float x, y, z, k;
+    float ele = -elevation * pi / 180.0;
+    float azi = (azimuth + 90.0) * pi / 180.0;
+
+    k = cos(ele);
+    z = sin(ele);
+    y = sin(azi) * k;
+    x = cos(azi) * k;
+
+    return vec3( x, z, y );
+}
+
+void main()
+{
+    vec3 clipPlane = p2cart(azimuth, elevation);
+    vec3 view = normalize(pos - gl_ModelViewMatrixInverse[3].xyz);
+    Ray eye = Ray( gl_ModelViewMatrixInverse[3].xyz, normalize(view) );
+
+    AABB aabb = AABB(vec3(-1.0), vec3(+1.0));
+
+    float tnear, tfar;
+    IntersectBox(eye, aabb, tnear, tfar);
+    if (tnear < 0.0) tnear = 0.0;
+
+    vec3 rayStart = eye.Origin + eye.Dir * tnear;
+    vec3 rayStop = eye.Origin + eye.Dir * tfar;
+    rayStart = 0.5 * (rayStart + 1.0);
+    rayStop = 0.5 * (rayStop + 1.0);
+
+    vec3 pos = rayStart;
+    vec3 dir = rayStop - rayStart;
+    vec3 step = normalize(dir) * stepSize;
+    float travel = distance(rayStop, rayStart);
+    
+    float len = length(dir);
+    dir = normalize(dir);
+       
+
+    //clipPlaneDepth = 0.3;
+
+    if (clip)
+    {
+        gl_FragColor.a = 0.0;   
+        //next, see if clip plane faces viewer
+        bool frontface = (dot(dir , clipPlane) > 0.0);
+        //next, distance from ray origin to clip plane
+        float dis = dot(dir,clipPlane);
+
+        if (dis != 0.0 )
+            dis = (-clipPlaneDepth - dot(clipPlane, rayStart.xyz - 0.5)) / dis;
+
+        if ((!frontface) && (dis < 0.0))
+            return;
+
+        if ((frontface) && (dis > len))
+            return;
+
+        if ((dis > 0.0) && (dis < len)) 
+        {
+            if (frontface) {
+                rayStart = rayStart + dir * dis;
+            } else {
+                rayStop =  rayStart + dir * dis; 
+            }
+    
+            pos = rayStart;
+            step = normalize(rayStop-rayStart) * stepSize;
+            travel = distance(rayStop, rayStart);   
+        }   
+    }
+
+    vec4 accum = vec4(0.0, 0.0, 0.0, 0.0);
+    vec4 sample = vec4(0.0, 0.0, 0.0, 0.0);
+    vec4 value = vec4(0.0, 0.0, 0.0, 0.0);
+    
+    if (dither) //jaggy artefact dithering
+    {
+        pos = pos + step * (fract(sin(gl_FragCoord.x * 12.9898 + gl_FragCoord.y * 78.233) * 43758.5453));
+    }
+    
+    for (int i=0; i < numSamples && travel > 0.0; ++i, pos += step, travel -= stepSize)
+    {
+        float tf_pos;
+
+        tf_pos = texture3D(tex, pos).x;   
+		value = texture1D(ramp, tf_pos);
+
+        // Process the volume sample
+		sample.a = value.a * opacityFactor * (1.0 / float(numSamples));
+		sample.rgb = value.rgb * sample.a * lightFactor;
+		accum.rgb += (1.0 - accum.a) * sample.rgb;
+		accum.a += sample.a;
+
+        if(accum.a >= 1.0)
+            break;
+    }
+
+    gl_FragColor.rgb = accum.rgb;
+    gl_FragColor.a = accum.a;
+
+}
+"""
+
+import os
+#import bpy
+#from bgl import *
+#from PIL import Image
+from volume_render.pydicom import read_file
+ 
+def loadVolume(dirName, filelist, texture):
+    """read volume from directory as a 3D texture"""
+    # list images in directory
+    #dirname = os.path.dirname(dirName)
+
+    if filelist[0].name == "":
+        files = sorted(os.listdir(dirName))
+    else:
+        files = filelist
+
+    print('loading mages from: %s' % dirName)
+
+    depth = 0
+    width, height = 0, 0
+    for file in files:
+        if hasattr(file, 'name'):
+            file_path = os.path.abspath(os.path.join(dirName, file.name))
+        else:
+            file_path = os.path.abspath(os.path.join(dirName, file))
+#        try:
+        # read image
+        #imgData = Image.open(file_path)
+        imgData = bpy.data.images.load(file_path)
+
+         # check if all are of the same size
+        if depth is 0:
+            width, height = imgData.size
+            #width, height = img.size[0], img.size[1] 
+            data = Buffer(GL_FLOAT, [len(files), width * height])
+            #data[depth] = img.getdata()
+            data[depth] = list(imgData.pixels)[::4]
+        else:
+            if (width, height) == (imgData.size[0], imgData.size[1]):
+                #data[depth] = img.getdata()
+                data[depth] = list(imgData.pixels)[::4]
+            else:
+                print('mismatch')
+                raise RunTimeError("image size mismatch")
+        depth += 1
+
+        bpy.data.images.remove(imgData)
+
+#        except:
+            # skip
+            #print('Invalid image: %s' % file_path)
+
+    # load image data into single array
+    print('volume data dims: %d %d %d' % (width, height, depth))
+
+    # load data into 3D texture
+    glPixelStorei(GL_UNPACK_ALIGNMENT,1)
+    glBindTexture(GL_TEXTURE_3D, texture)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexImage3D(GL_TEXTURE_3D, 0, GL_RED, width, height, depth, 0, 
+                 GL_RED, GL_FLOAT, data)
+
+    #return texture
+    return (width, height, depth)
+
+
+
+def loadDCMVolume(dirName, filelist, texture):
+    """read dcm volume from directory as a 3D texture"""
+    # list images in directory
+    if filelist[0].name == "":
+        files = sorted(os.listdir(dirName))
+    else:
+        files = filelist
+
+    print('loading mages from: %s' % dirName)
+
+    depth = 0
+    width, height = 0, 0
+    for file in files:
+        #skip non dcm files
+        if hasattr(file, 'name'):
+            if not file.name.endswith(".dcm"): 
+                print('skipping junk file: ' + file)
+                continue
+            file_path = os.path.abspath(os.path.join(dirName, file.name))
+        else:
+            if not file.endswith(".dcm"): 
+                print('skipping junk file: ' + file)
+                continue
+            file_path = os.path.abspath(os.path.join(dirName, file))
+
+ #        try:
+        # read image
+        ds = read_file(file_path)
+        img_size = ds.pixel_array.shape
+        imgData = ds.pixel_array.flat.copy().astype("f")
+        #imgData = ds.PixelData
+
+        # check if all are of the same size
+        if depth is 0:
+            width, height = img_size[0], img_size[1] 
+            data = Buffer(GL_FLOAT, [len(files), width * height])
+            data[depth] = imgData/max(imgData)
+        else:
+            if (width, height) == (img_size[0], img_size[1]):
+                #data[depth] = imgData[::2]
+                data[depth] = imgData/max(imgData)
+            else:
+                print('mismatch')
+                raise RunTimeError("image size mismatch")
+            
+        depth += 1
+#        except:
+#            print('Invalid image: %s' % file_path)
+
+    # load image data into single array
+    print('volume data dims: %d %d %d' % (width, height, depth))
+
+    # load data into 3D texture
+    glPixelStorei(GL_UNPACK_ALIGNMENT,1)
+    glBindTexture(GL_TEXTURE_3D, texture)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexImage3D(GL_TEXTURE_3D, 0,  GL_RED, width, height, depth, 0, 
+                 GL_RED,  GL_FLOAT, data)
+
+    return (width, height, depth, float(ds.PixelSpacing[0]), float(ds.PixelSpacing[1]), float(ds.SliceThickness))
+
+# load texture
+def loadTexture(filename):
+    img = Image.open(filename)
+    #img_data = np.array(list(img.getdata()), 'B')
+    #texture = GL.glGenTextures(1)
+    width, height = img.size[0], img.size[1] 
+    img_data = Buffer(GL_BYTE, [width * height * 4])
+    texture = Buffer(GL_INT, [1])
+    glGenTextures(1, texture)
+    glPixelStorei(GL_UNPACK_ALIGNMENT,1)
+    glBindTexture(GL_TEXTURE_2D, texture)
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.size[0], img.size[1], 
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, img_data)
+    
+    return texture
+
+
 
 # Helper functions
 def addCube(pixelDimsX, pixelDimsY, pixelDimsZ, pixelSpacingX, pixelSpacingY, pixelSpacingZ):
@@ -399,7 +728,7 @@ class ImportImageVolume(Operator, ImportHelper):
 
         if not 'VolCube' in context.scene.objects:
             addCube(float(volume[0]), float(volume[1]), float(volume[2]),
-                    fpix_width, pix_height, slice_thickness)
+                    self.pix_width, self.pix_height, self.slice_thickness)
 
 
         #print('added a cube and succsesfully created 3d OpenGL texture from Image Stack')
