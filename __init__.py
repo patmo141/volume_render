@@ -53,13 +53,16 @@ from bpy.types import Operator
 #from .vol_shaders import vs, fs
 from bgl import *
 
-volrender_program = None
-volrender_ramptext = Buffer(GL_INT, [1])
-volrender_texture = Buffer(GL_INT, [1])
+class vars():
+    volrender_ramptext = Buffer(GL_INT, 1, [-1])
+    volrender_texture = Buffer(GL_INT, 1, [-1])
+    volrender_program = None
+    slice_program = None
+    draw_handler = None
 
-rampColors = 256
-step  = 1.0 / (rampColors - 1.0)
-updateProgram = 0
+    rampColors = 256
+    step  = 1.0 / (rampColors - 1.0)
+    updateProgram = 0
 
 #
 # Shader
@@ -72,6 +75,7 @@ varying vec3 pos;
 void main()
 {
     gl_Position = ftransform();
+//  gl_position = gl_ModelViewMatrix * gl_Vertex;
     pos = vec3(gl_Vertex);
 }
 """
@@ -145,8 +149,8 @@ void main()
 {
     vec3 clipPlane = p2cart(azimuth, elevation);
     vec3 view = normalize(pos - gl_ModelViewMatrixInverse[3].xyz);
-    Ray eye = Ray( gl_ModelViewMatrixInverse[3].xyz, normalize(view) );
 
+    Ray eye = Ray(gl_ModelViewMatrixInverse[3].xyz, normalize(view));
     AABB aabb = AABB(vec3(-1.0), vec3(+1.0));
 
     float tnear, tfar;
@@ -155,9 +159,12 @@ void main()
 
     vec3 rayStart = eye.Origin + eye.Dir * tnear;
     vec3 rayStop = eye.Origin + eye.Dir * tfar;
+ 
+    // Transform from object space to texture coordinate space: 
     rayStart = 0.5 * (rayStart + 1.0);
     rayStop = 0.5 * (rayStop + 1.0);
 
+    // Perform the ray marching:
     vec3 pos = rayStart;
     vec3 dir = rayStop - rayStart;
     vec3 step = normalize(dir) * stepSize;
@@ -165,9 +172,6 @@ void main()
     
     float len = length(dir);
     dir = normalize(dir);
-       
-
-    //clipPlaneDepth = 0.3;
 
     if (clip)
     {
@@ -214,13 +218,13 @@ void main()
         float tf_pos;
 
         tf_pos = texture3D(tex, pos).x;   
-		value = texture1D(ramp, tf_pos);
+        value = texture1D(ramp, tf_pos);
 
         // Process the volume sample
-		sample.a = value.a * opacityFactor * (1.0 / float(numSamples));
-		sample.rgb = value.rgb * sample.a * lightFactor;
-		accum.rgb += (1.0 - accum.a) * sample.rgb;
-		accum.a += sample.a;
+        sample.a = value.a * opacityFactor * (1.0 / float(numSamples));
+        sample.rgb = value.rgb * sample.a * lightFactor;
+        accum.rgb += (1.0 - accum.a) * sample.rgb;
+        accum.a += sample.a;
 
         if(accum.a >= 1.0)
             break;
@@ -232,11 +236,70 @@ void main()
 }
 """
 
+
+strVS = """
+//in vec3 aVert;
+//uniform mat4 uMVMatrix;
+//uniform mat4 uPMatrix;
+uniform float SliceFrac;
+uniform int SliceMode;
+out vec3 texcoord;
+
+void main()
+{
+    // X-slice?
+    if (SliceMode == 1)
+    {
+//      texcoord = vec3(SliceFrac, aVert.x, 1.0-aVert.y);
+        texcoord = vec3(SliceFrac, gl_Vertex.x*0.5+0.5, gl_Vertex.y*0.5+0.5);
+    }
+    // Y-slice?
+    else if (SliceMode == 2)
+    {
+//      texcoord = vec3(aVert.x, SliceFrac, 1.0-aVert.y);
+        texcoord = vec3(gl_Vertex.x*0.5+0.5, SliceFrac, gl_Vertex.y*0.5+0.5);
+    }
+    // Z-slice
+    else if (SliceMode == 3)
+    {
+//      texcoord = vec3(aVert.x, 1.0-aVert.y, SliceFrac);
+        texcoord = vec3(gl_Vertex.x*0.5+0.5, gl_Vertex.y*0.5+0.5, SliceFrac);
+    }
+
+    // calculate transformed vertex
+//  gl_Position = uPMatrix * uMVMatrix * vec4(aVert, 1.0); 
+//  gl_position = gl_ModelViewMatrix * gl_Vertex;
+    gl_Position = ftransform();
+}
+"""
+
+strFS = """
+# version 330 compatibility
+in vec3 texcoord;
+uniform sampler3D tex;
+//out vec4 fragColor;
+
+void main()
+{
+    // look up color in texture
+//  float col = texture3D(tex, texcoord).r;
+    vec4 col = texture3D(tex, texcoord);
+//  fragColor = col.rrra;
+    gl_FragColor = col.rrrr;
+}
+"""
+
+
 import os
 #import bpy
 #from bgl import *
-#from PIL import Image
 from volume_render.pydicom import read_file
+
+try:
+    from PIL import Image, ImageMath
+    pil = True
+except:
+    pil = False
  
 def loadVolume(dirName, filelist, texture):
     """read volume from directory as a 3D texture"""
@@ -257,31 +320,39 @@ def loadVolume(dirName, filelist, texture):
             file_path = os.path.abspath(os.path.join(dirName, file.name))
         else:
             file_path = os.path.abspath(os.path.join(dirName, file))
-#        try:
-        # read image
-        #imgData = Image.open(file_path)
-        imgData = bpy.data.images.load(file_path)
+        #try:
+        if pil == True:
+            imgData = Image.open(file_path)
 
-         # check if all are of the same size
-        if depth is 0:
-            width, height = imgData.size
-            #width, height = img.size[0], img.size[1] 
-            data = Buffer(GL_FLOAT, [len(files), width * height])
-            #data[depth] = img.getdata()
-            data[depth] = list(imgData.pixels)[::4]
+            # check if all are of the same size
+            if depth is 0:
+                width, height = imgData.size[0], imgData.size[1] 
+                data = Buffer(GL_BYTE, [len(files), width * height])
+                data[depth] = imgData.getdata()
+            else:
+                if (width, height) == (imgData.size[0], imgData.size[1]):
+                    data[depth] = imgData.getdata()
+                else:
+                    print('mismatch')
+                    raise RunTimeError("image size mismatch")
         else:
-            if (width, height) == (imgData.size[0], imgData.size[1]):
-                #data[depth] = img.getdata()
+            imgData = bpy.data.images.load(file_path)
+
+            if depth is 0:
+                width, height = imgData.size
+                data = Buffer(GL_FLOAT, [len(files), width * height])
                 data[depth] = list(imgData.pixels)[::4]
             else:
-                print('mismatch')
-                raise RunTimeError("image size mismatch")
+                if (width, height) == (imgData.size[0], imgData.size[1]):
+                    data[depth] = list(imgData.pixels)[::4]
+                else:
+                    print('mismatch')
+                    raise RunTimeError("image size mismatch")
+
+            bpy.data.images.remove(imgData)
+
         depth += 1
-
-        bpy.data.images.remove(imgData)
-
-#        except:
-            # skip
+        #except:
             #print('Invalid image: %s' % file_path)
 
     # load image data into single array
@@ -290,17 +361,20 @@ def loadVolume(dirName, filelist, texture):
     # load data into 3D texture
     glPixelStorei(GL_UNPACK_ALIGNMENT,1)
     glBindTexture(GL_TEXTURE_3D, texture)
-    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_BORDER)
     glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
     glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-    glTexImage3D(GL_TEXTURE_3D, 0, GL_RED, width, height, depth, 0, 
-                 GL_RED, GL_FLOAT, data)
 
+    if pil == True:
+        glTexImage3D(GL_TEXTURE_3D, 0, GL_RED, width, height, depth, 0, 
+                     GL_RED, GL_UNSIGNED_BYTE, data)
+    else:
+        glTexImage3D(GL_TEXTURE_3D, 0, GL_RED, width, height, depth, 0, 
+                     GL_RED, GL_FLOAT, data)
     #return texture
     return (width, height, depth)
-
 
 
 def loadDCMVolume(dirName, filelist, texture):
@@ -328,7 +402,7 @@ def loadDCMVolume(dirName, filelist, texture):
                 continue
             file_path = os.path.abspath(os.path.join(dirName, file))
 
- #        try:
+        #try:
         # read image
         ds = read_file(file_path)
         img_size = ds.pixel_array.shape
@@ -349,8 +423,8 @@ def loadDCMVolume(dirName, filelist, texture):
                 raise RunTimeError("image size mismatch")
             
         depth += 1
-#        except:
-#            print('Invalid image: %s' % file_path)
+        #except:
+            #print('Invalid image: %s' % file_path)
 
     # load image data into single array
     print('volume data dims: %d %d %d' % (width, height, depth))
@@ -358,9 +432,9 @@ def loadDCMVolume(dirName, filelist, texture):
     # load data into 3D texture
     glPixelStorei(GL_UNPACK_ALIGNMENT,1)
     glBindTexture(GL_TEXTURE_3D, texture)
-    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER)
+    glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_BORDER)
     glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
     glTexParameterf(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
     glTexImage3D(GL_TEXTURE_3D, 0,  GL_RED, width, height, depth, 0, 
@@ -368,26 +442,145 @@ def loadDCMVolume(dirName, filelist, texture):
 
     return (width, height, depth, float(ds.PixelSpacing[0]), float(ds.PixelSpacing[1]), float(ds.SliceThickness))
 
-# load texture
-def loadTexture(filename):
-    img = Image.open(filename)
-    #img_data = np.array(list(img.getdata()), 'B')
-    #texture = GL.glGenTextures(1)
-    width, height = img.size[0], img.size[1] 
-    img_data = Buffer(GL_BYTE, [width * height * 4])
-    texture = Buffer(GL_INT, [1])
-    glGenTextures(1, texture)
-    glPixelStorei(GL_UNPACK_ALIGNMENT,1)
-    glBindTexture(GL_TEXTURE_2D, texture)
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.size[0], img.size[1], 
-                 0, GL_RGBA, GL_UNSIGNED_BYTE, img_data)
-    
-    return texture
 
+def compileShader(source, shaderType):
+    shader = glCreateShader(shaderType)
+    glShaderSource(shader, source)
+    glCompileShader(shader)
+
+    shader_ok = Buffer(GL_INT, 1)
+    glGetShaderiv(shader, GL_COMPILE_STATUS, shader_ok)
+    
+    if not shader_ok[0]:
+        infoLen = Buffer(GL_INT, 1)
+        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, infoLen)
+        infoLog = Buffer(GL_BYTE, infoLen[0])
+
+        if infoLen[0] > 1:
+            length = Buffer(GL_INT, 1)
+            glGetShaderInfoLog(shader, infoLen[0], length, infoLog)
+            print("Shader compile failure (%s):" % (shaderType))  
+            print("".join(chr(infoLog[i]) for i in range(length[0])))
+            #print (''.join(infoLog))
+
+    return shader
+
+
+def loadShaders(strVS, strFS):
+    # compile vertex shader
+    shaderV = compileShader(strVS, GL_VERTEX_SHADER)
+    # compiler fragment shader
+    shaderF = compileShader(strFS, GL_FRAGMENT_SHADER)
+    
+    # create the program object
+    if vars.slice_program == None:
+        vars.slice_program = glCreateProgram()
+
+        # attach shaders
+        glAttachShader(vars.slice_program, shaderV)
+        glAttachShader(vars.slice_program, shaderF)
+
+        # Link the program
+        glLinkProgram(vars.slice_program)
+        glDeleteShader(shaderV)
+        glDeleteShader(shaderF)
+        #glDeleteProgram(program)
+
+        # Check if there were some issues when linking the shader.
+        program_ok = Buffer(GL_INT, 1)
+        glGetProgramiv(vars.slice_program, GL_LINK_STATUS, program_ok); #missing gl.GL_LINK_STATUS 0x8B82 = 35714
+
+        if not program_ok[0]:
+            infoLen = Buffer(GL_INT, 1)
+            glGetProgramiv(vars.slice_program, GL_INFO_LOG_LENGTH, infoLen)
+            infoLog = Buffer(GL_BYTE, infoLen[0])
+
+            if infoLen[0] > 1:
+                length = Buffer(GL_INT, 1)
+                glGetProgramInfoLog(vars.slice_program, infoLen[0], length, infoLog);
+                print ('Error linking program:')
+                #print (''.join(infoLog))
+                print (''.join(chr(infoLog[i]) for i in range(length[0])))
+    
+    return vars.slice_program
+
+
+def drawSlice(self, context, program, texture, sliceMode, slicePos, x = 0, y = 0, width = 0, height = 0):
+    """
+    OpenGL code to draw a rectangle in the viewport
+    """
+    glDisable(GL_DEPTH_TEST)
+
+    # view setup
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+
+    glOrtho(-1, 1, -1, 1, -15, 15)
+    gluLookAt(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+
+    act_tex = Buffer(GL_INT, 1)
+    glGetIntegerv(GL_TEXTURE_2D, act_tex)
+
+    viewport = Buffer(GL_INT, 4)
+    glGetIntegerv(GL_VIEWPORT, viewport)
+
+    if width == 0 and height == 0:
+        width = viewport[2]
+        height = viewport[3]
+
+    glViewport(viewport[0] + x, viewport[1] + y, width, height)
+    glScissor(viewport[0] + x, viewport[1] + y, width, height)
+
+    glUseProgram(program)
+
+    # set current slice mode
+    glUniform1i(glGetUniformLocation(program, "SliceMode"), sliceMode)
+    # set current slice fraction
+    glUniform1f(glGetUniformLocation(program, "SliceFrac"), slicePos)
+    
+    # enable texture
+    #glEnable(GL_TEXTURE_3D)
+    #glActiveTexture(GL_TEXTURE0 + texture)
+    glBindTexture(GL_TEXTURE_3D, texture)
+    glUniform1i(glGetUniformLocation(program, "tex"), texture)
+
+    # draw routine
+    texco = [(1, 1), (0, 1), (0, 0), (1, 0)]
+    verco = [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)]
+
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+
+    glColor4f(1.0, 1.0, 1.0, 1.0)
+
+    glBegin(GL_QUADS)
+    for i in range(4):
+        glTexCoord3f(texco[i][0], texco[i][1], 0.0)
+        glVertex2f(verco[i][0], verco[i][1])
+    glEnd()
+
+    glBindTexture(GL_TEXTURE_3D, 0)
+    #glActiveTexture(GL_TEXTURE0)
+    glUseProgram(0)
+
+    # restoring settings
+    glBindTexture(GL_TEXTURE_2D, act_tex[0])
+
+    #glDisable(GL_TEXTURE_3D)
+
+    # reset view
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+
+    glMatrixMode(GL_MODELVIEW)
+    glPopMatrix()
+
+    glViewport(viewport[0], viewport[1], viewport[2], viewport[3])
+    glScissor(viewport[0], viewport[1], viewport[2], viewport[3])
 
 
 # Helper functions
@@ -401,55 +594,45 @@ def addCube(pixelDimsX, pixelDimsY, pixelDimsZ, pixelSpacingX, pixelSpacingY, pi
     if not 'VolumeMat' in bpy.data.materials:
         mat = bpy.data.materials.new('VolumeMat')
         mat.use_transparency = True
-    else:
-        mat = bpy.data.materials['VolumeMat']
+
+    mat = bpy.data.materials['VolumeMat']
 
     # Create new cube
-    bpy.ops.mesh.primitive_cube_add(location=(0,3,0))
-    cube = bpy.context.object
-    cube.name = 'VolCube'
+    if not 'VolCube' in bpy.data.objects:
+        bpy.ops.mesh.primitive_cube_add(location=(0,3,0))
+        cube = bpy.context.object
+        cube.name = 'VolCube'
 
+        # Add material to current object
+        me = cube.data
+        me.materials.append(mat)
+
+    cube = bpy.data.objects['VolCube']
     cube.scale = (pixelDimsX * pixelSpacingX / 100.0, 
                   pixelDimsY * pixelSpacingY / 100.0, 
                   pixelDimsZ * pixelSpacingZ / 100.0)
 
-
-    # Add material to current object
-    me = cube.data
-    me.materials.append(mat)
-
     addColorRamp()
 
-#    I think my version is easier.
-#    bme = bmesh.new()
-#    bmesh.ops.create_cube(bme, size = 1)
-    
-#    vol_cube = bpy.data.meshes.new("Vol Cube")
-#    cube = bpy.data.objects.new("Vol Cube", vol_cube)
-#    bme.to_mesh(vol_cube)
-#    context.scene.objects.link(cube)
-#    bme.free()
     return (cube, mat)
 
 
 def update_colorRamp():
-    global volrender_ramptext, rampColors, step
-
     cr_node = bpy.data.scenes[0].node_tree.nodes['ColorRamp']
-    pixels = Buffer(GL_FLOAT, [rampColors, 4])
+    pixels = Buffer(GL_FLOAT, [vars.rampColors, 4])
 
-    for x in range(0, rampColors):
-       pixels[x] = cr_node.color_ramp.evaluate(x * step)
+    for x in range(0, vars.rampColors):
+       pixels[x] = cr_node.color_ramp.evaluate(x * vars.step)
 
-    glActiveTexture(GL_TEXTURE0 + volrender_ramptext[0])
-    glBindTexture(GL_TEXTURE_1D, volrender_ramptext[0])
-    glTexSubImage1D(GL_TEXTURE_1D, 0, 0, rampColors, GL_RGBA, GL_FLOAT, pixels)
+    glActiveTexture(GL_TEXTURE0 + vars.volrender_ramptext[0])
+    glBindTexture(GL_TEXTURE_1D, vars.volrender_ramptext[0])
+    glTexSubImage1D(GL_TEXTURE_1D, 0, 0, vars.rampColors, GL_RGBA, GL_FLOAT, pixels)
     glActiveTexture(GL_TEXTURE0)
     
     # update Viewport By stteing the time line frame
-#   bpy.data.scenes[0].update_tag()
-#   bpy.data.scenes[0].update()
-#   bpy.context.area.tag_redraw()
+    #bpy.data.scenes[0].update_tag()
+    #bpy.data.scenes[0].update()
+    #bpy.context.area.tag_redraw()
     for area in bpy.context.screen.areas:
         if area.type in ['VIEW_3D']:
             area.tag_redraw()
@@ -466,50 +649,46 @@ def addColorRamp():
         nodes['ColorRamp'].color_ramp.elements[0].color[3] = 0.0
 
 def initColorRamp(program):
-    global volrender_ramptext
- 
-    pixels = Buffer(GL_FLOAT, [rampColors, 4])
+    pixels = Buffer(GL_FLOAT, [vars.rampColors, 4])
 
-    if volrender_ramptext[0] == 0:
-        glGenTextures(1, volrender_ramptext)
+    if vars.volrender_ramptext[0] == -1:
+        glGenTextures(1, vars.volrender_ramptext)
     
     glPixelStorei(GL_UNPACK_ALIGNMENT,1)
-    glBindTexture(GL_TEXTURE_1D, volrender_ramptext[0])
+    glBindTexture(GL_TEXTURE_1D, vars.volrender_ramptext[0])
     glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP)
     glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
     glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-    glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA8, rampColors, 0, GL_RGBA, GL_FLOAT, pixels)
+    glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA8, vars.rampColors, 0, GL_RGBA, GL_FLOAT, pixels)
     glBindTexture(GL_TEXTURE_1D, 0)
 
     glUseProgram(program)
-    glUniform1i(28, volrender_ramptext[0])
+    glUniform1i(28, vars.volrender_ramptext[0])
     glUseProgram(0)
 
     # update the color ramp one time after init
     update_colorRamp()
 
-    return volrender_ramptext
+    return vars.volrender_ramptext
 
 
 def replaceShader(tex):
-    global volrender_program
-    #program = None
     # This is not a save. It always gets the sahder number from the last added material.
     # To get the correct shader number the object must be the last added object.
-    if volrender_program == None:
+    if vars.volrender_program == None:
         for prog in range(32767):
             if glIsProgram(prog) == True:
-                volrender_program = prog
+                vars.volrender_program = prog
 
-    if volrender_program == None:
-        print("Shader program number not found")
-        return
+        if vars.volrender_program == None:
+            print("Shader program number not found")
+            return
 
     #Get the shader generated by setSource()     
     maxCount = 9
     count = Buffer(GL_INT, 1)
-    shaders = Buffer(GL_BYTE, [maxCount])
-    glGetAttachedShaders(volrender_program, maxCount, count, shaders)
+    shaders = Buffer(GL_BYTE, maxCount)
+    glGetAttachedShaders(vars.volrender_program, maxCount, count, shaders)
 
     #Get the original vertex and fragment shader
     vertShader = shaders[0]
@@ -547,7 +726,7 @@ def replaceShader(tex):
         print("".join(chr(infoLog[i]) for i in range(length[0])))
     else:
         #Link the shader program's
-        glLinkProgram(volrender_program)
+        glLinkProgram(vars.volrender_program)
 
         #Delete the shader objects
         glDeleteShader(vertShader)
@@ -556,7 +735,7 @@ def replaceShader(tex):
         # Bind the volume texture
         glActiveTexture(GL_TEXTURE0 + tex)
         glBindTexture(GL_TEXTURE_3D, tex)
-        glUseProgram(volrender_program)
+        glUseProgram(vars.volrender_program)
         glUniform1i(27, tex)
         glUseProgram(0)
         glActiveTexture(GL_TEXTURE0)
@@ -566,48 +745,74 @@ def replaceShader(tex):
 # Property (uniform) update functions
 #
 def update_azimuth(self, context):
-    #global volrender_program
-    glUseProgram(volrender_program)
+    glUseProgram(vars.volrender_program)
     glUniform1f(20, self.azimuth)
     glUseProgram(0)
  
 def update_elevation(self, context):
-    #global volrender_program
-    glUseProgram(volrender_program)
+    glUseProgram(vars.volrender_program)
     glUniform1f(21, self.elevation) 
     glUseProgram(0)
     
 def update_clipPlaneDepth(self, context):
-    #global volrender_program
-    glUseProgram(volrender_program)
+    glUseProgram(vars.volrender_program)
     glUniform1f(22, self.clipPlaneDepth) 
     glUseProgram(0)
 
 def update_clip(self, context):
-    #global volrender_program
-    glUseProgram(volrender_program)
+    glUseProgram(vars.volrender_program)
     glUniform1f(23, self.clip)  
     glUseProgram(0)
 
 def update_dither(self, context):
-    #global volrender_program
-    glUseProgram(volrender_program)
+    glUseProgram(vars.volrender_program)
     glUniform1f(24, self.dither) 
     glUseProgram(0)
 
 def update_opacityFactor(self, context):
-    #global volrender_program
-    glUseProgram(volrender_program)
+    glUseProgram(vars.volrender_program)
     glUniform1f(25, self.opacityFactor) 
     glUseProgram(0)
 
 def update_lightFactor(self, context):
-    #global volrender_program
-    glUseProgram(volrender_program)
+    glUseProgram(vars.volrender_program)
     glUniform1f(26, self.lightFactor) 
     glUseProgram(0)
 
-  
+#def update_shaderType(self, context):
+    #glUseProgram(vars.volrender_program)
+    #glUniform1i(29, int(self.shaderType)) 
+    #glUseProgram(0)
+
+def update_sliceMode(self, context):
+    if vars.slice_program:
+        #glUseProgram(vars.slice_program)
+        #glUniform1i(glGetUniformLocation(vars.slice_program, "SliceMode"), int(self.sliceMode))
+        #glUseProgram(0)
+        if vars.draw_handler != None:
+            bpy.types.SpaceView3D.draw_handler_remove(vars.draw_handler, "WINDOW")
+            vars.draw_handler = None
+
+        if vars.draw_handler == None:
+            args = (self, context, vars.slice_program, vars.volrender_texture[0], int(context.object.sliceMode), context.object.slicePos, 0, 0, 200, 200)
+            vars.draw_handler = bpy.types.SpaceView3D.draw_handler_add(drawSlice, args, "WINDOW", "POST_PIXEL")
+
+
+
+def update_slicePos(self, context):
+    if vars.slice_program:
+        #glUseProgram(vars.slice_program)
+        #glUniform1f(glGetUniformLocation(vars.slice_program, "SliceFrac"), self.slicePos)
+        #glUseProgram(0)
+        if vars.draw_handler != None:
+            bpy.types.SpaceView3D.draw_handler_remove(vars.draw_handler, "WINDOW")
+            vars.draw_handler = None
+
+        if vars.draw_handler == None:
+            args = (self, context, vars.slice_program, vars.volrender_texture[0], int(context.object.sliceMode), context.object.slicePos, 0, 0, 200, 200)
+            vars.draw_handler = bpy.types.SpaceView3D.draw_handler_add(drawSlice, args, "WINDOW", "POST_PIXEL")
+
+
 def initObjectProperties():
     bpy.types.Object.clip = BoolProperty(
         name = "Clip",
@@ -656,10 +861,52 @@ def initObjectProperties():
     bpy.types.Object.lightFactor = FloatProperty(
         name = "Light Factor", 
         description = "Enter a float",
-        default = 10,
+        default = 1.2,
         min = 0,
         max = 100,
         update = update_lightFactor)
+
+#   bpy.types.Object.shaderType = EnumProperty(
+#       items = [('1', 'Luminance', 'luminance light'),
+#                ('2', 'Brightness', 'brightness control'),
+#                ('3', 'Color', 'color control'),
+#                ('4', 'Density', 'density control'),
+#                ('5', 'Isosurface', 'isosurface'),
+#                ('6', 'Transparent Isosurface', 'transparent isosurface'),
+#                ('7', 'MIP', 'maximum intensity projection')],
+#       name = "Shader Type",
+#       default = '7',
+#       update=update_shaderType)
+
+    bpy.types.Object.sliceMode = EnumProperty(
+        items = [('0', '3D', 'Render 3D volume'),
+                 ('1', 'X', 'Render 2D X axis slice'),
+                 ('2', 'Y', 'Render 2D X axis slice'),
+                 ('3', 'Z', 'Render 2D X axis slice')],
+        name = "Slice Mode",
+        default = '0',
+        update=update_sliceMode)
+
+    bpy.types.Object.slicePos = FloatProperty(
+        name = "Slice Position", 
+        description = "Enter a float",
+        default = 0.5,
+        min = 0.0,
+        max = 1.0,
+        update=update_slicePos)
+
+
+def deleteObjectProperties():
+    del bpy.types.Object.clip 
+    del bpy.types.Object.dither
+    del bpy.types.Object.azimuth
+    del bpy.types.Object.elevation
+    del bpy.types.Object.clipPlaneDepth
+    del bpy.types.Object.opacityFactor
+    del bpy.types.Object.lightFactor
+    #del bpy.types.Object.shaderType
+    del bpy.types.Object.sliceMode
+    del bpy.types.Object.slicePos
 
 
 class ImportImageVolume(Operator, ImportHelper):
@@ -702,33 +949,29 @@ class ImportImageVolume(Operator, ImportHelper):
     pix_width = FloatProperty(
             name="Pixel Width",
             description="physical width of pixel in Blender Units",
-            default= .1,
+            default= 1.0,
             )
     pix_height = FloatProperty(
             name="Pixel Height",
             description="physical height of pixel in Blender Units",
-            default= .1,
+            default= 1.0,
             )
     slice_thickness = FloatProperty(
             name="Slice Thickness",
             description="physical thickness of image slice in Blender Units",
-            default= .1,
+            default= 1.0,
             )
 
     def execute(self,context):
-        global volrender_texture
-       
         print('loading texture')
  
-        if volrender_texture[0] == 0:
-            glGenTextures(1, volrender_texture)
+        if vars.volrender_texture[0] == -1:
+            glGenTextures(1, vars.volrender_texture)
 
-        volume = loadVolume(self.directory, self.files, volrender_texture[0])
+        volume = loadVolume(self.directory, self.files, vars.volrender_texture[0])
         
-
-        if not 'VolCube' in context.scene.objects:
-            addCube(float(volume[0]), float(volume[1]), float(volume[2]),
-                    self.pix_width, self.pix_height, self.slice_thickness)
+        addCube(float(volume[0]), float(volume[1]), float(volume[2]),
+                self.pix_width, self.pix_height, self.slice_thickness)
 
 
         #print('added a cube and succsesfully created 3d OpenGL texture from Image Stack')
@@ -776,16 +1019,14 @@ class ImportDICOMVoulme(Operator, ImportHelper):
             )
 
     def execute(self,context):
-        global volrender_texture
+        if vars.volrender_texture[0] == -1:
+            glGenTextures(1, vars.volrender_texture)
 
-        if volrender_texture[0] == 0:
-            glGenTextures(1, volrender_texture)
+        volume = loadDCMVolume(self.directory, self.files, vars.volrender_texture[0])
 
-        volume = loadDCMVolume(self.directory, self.files, volrender_texture[0])
-
-        if not 'VolCube' in context.scene.objects:
-            addCube(float(volume[0]), float(volume[1]), float(volume[2]),
-                    float(volume[3]), float(volume[4]), float(volume[5]))
+        #if not 'VolCube' in context.scene.objects:
+        addCube(float(volume[0]), float(volume[1]), float(volume[2]),
+                volume[3], volume[4], volume[5])
 
         #print('added a cube and succsesfully created 3d OpenGL texture from DICOM stack')
         #print('the image id as retuned by glGenTextures is %i' % volrender_texture[0])
@@ -799,15 +1040,13 @@ class ShaderReplace(Operator):
     bl_label = "Replace Shader"
     bl_description = "Render or update the volume"
 
-    def execute(self,context):
-        global volrender_program
-        global volrender_texture
-        global volrender_ramptext
 
+    def execute(self,context):
         if 'VolCube' in bpy.data.objects:
-            replaceShader(volrender_texture[0])
-            volrender_ramptext = initColorRamp(volrender_program)
-            #print('program ', volrender_program, '  texture ', volrender_texture[0], '  rampText ', volrender_ramptext[0])
+            replaceShader(vars.volrender_texture[0])
+            vars.volrender_ramptext = initColorRamp(vars.volrender_program)
+            print('program ', vars.volrender_program, '  texture ', vars.volrender_texture[0], '  rampText ', vars.volrender_ramptext[0])
+            loadShaders(strVS, strFS)
 
             obj = context.object      
             update_azimuth(obj, bpy.context)
@@ -817,6 +1056,9 @@ class ShaderReplace(Operator):
             update_dither(obj, bpy.context)
             update_opacityFactor(obj, bpy.context)
             update_lightFactor(obj, bpy.context)
+            #update_shaderType(obj, bpy.context)
+            update_sliceMode(obj, bpy.context)
+            update_slicePos(obj, bpy.context)
 
         return {'FINISHED'}
 
@@ -829,54 +1071,70 @@ class UIPanel(bpy.types.Panel):
     bl_region_type = "UI"
 
     def draw(self, context):
-        global volrender_ramptext
-        
         layout = self.layout
         scene = context.scene
         obj = context.object
+        draw_handler = None
 
         layout.operator('import_test.import_volume_image', text="Import Image Volume")
         layout.operator('import_test.import_volume_dicom', text="Import DICOM Voulme")
         layout.operator('volume_render.replace_shader', text="Update Volume")
 
-        if volrender_ramptext[0] != 0 and obj != None and obj.name == 'VolCube':
-            layout.prop(obj, 'azimuth')
-            layout.prop(obj, 'elevation')
-            layout.prop(obj, 'clipPlaneDepth')
+        if vars.volrender_ramptext[0] != 0 and obj != None and obj.name == 'VolCube':
+            #layout.prop(obj, 'shaderType')
+            layout.prop(obj, 'sliceMode')
             layout.prop(obj, 'opacityFactor')
             layout.prop(obj, 'lightFactor')
-            layout.prop(obj, 'clip')
             layout.prop(obj, 'dither')
+
+            if obj.sliceMode == "0":
+                layout.prop(obj, 'azimuth')
+                layout.prop(obj, 'elevation')
+                layout.prop(obj, 'clipPlaneDepth')
+                layout.prop(obj, 'clip')
+
+                if vars.draw_handler != None:
+                    bpy.types.SpaceView3D.draw_handler_remove(vars.draw_handler, "WINDOW")
+                    vars.draw_handler = None
+            else:
+                layout.prop(obj, 'slicePos')
+
+                if vars.draw_handler == None:
+                    print("draw")
+                    args = (self, context, vars.slice_program, vars.volrender_texture[0], int(context.object.sliceMode), context.object.slicePos, 0, 0, 200, 200)
+                    vars.draw_handler = bpy.types.SpaceView3D.draw_handler_add(drawSlice, args, "WINDOW", "POST_PIXEL")
 
             cr_node = scene.node_tree.nodes['ColorRamp']
             layout.template_color_ramp(cr_node, "color_ramp", expand=True)
 
+            #this way the updating the color ramp sliders will work with actual Blender versions,
+            #but i will not react on color changes.
+            #update_colorRamp() 
+
 
 def scene_update(context):
-    global updateProgram
-    global updateProgram
-
     if bpy.data.materials.is_updated:
         #if bpy.data.materials['VolumeMat'].is_updated:
         #    print("update2")
-        #    updateProgram = 3
+        #    vars.updateProgram = 2
+        pass
 
-        if hasattr(bpy.data.scenes[0].node_tree, 'is_updated'):
-            if bpy.data.scenes[0].node_tree.is_updated:
-                #print("update")
-                update_colorRamp()
+    if hasattr(bpy.data.scenes[0].node_tree, 'is_updated'):
+        if bpy.data.scenes[0].node_tree.is_updated:
+            print("update")
+            update_colorRamp()
 
     # shader update delay 
-    if updateProgram == 1:
+    if vars.updateProgram == 1:
         print("update3")
-        replaceShader(volrender_texture[0])
+        replaceShader(vars.volrender_texture[0])
 
         for area in bpy.context.screen.areas:
             if area.type in ['VIEW_3D']:
                 area.tag_redraw()
 
-    if updateProgram > 0:
-        updateProgram -= 1
+    if vars.updateProgram > 0:
+        vars.updateProgram -= 1
 
 
 def register():
@@ -886,9 +1144,9 @@ def register():
     bpy.utils.register_class(ImportImageVolume)
     bpy.utils.register_class(ShaderReplace)
     bpy.utils.register_class(UIPanel)
-    if "scene_update" in bpy.app.handlers.scene_update_post:
-        bpy.app.handlers.scene_update_post.remove(scene_update)
-    bpy.app.handlers.scene_update_post.append(scene_update)
+
+    if not "scene_update" in bpy.app.handlers.scene_update_post:
+        bpy.app.handlers.scene_update_post.append(scene_update)
 
 
 def unregister():
@@ -896,25 +1154,26 @@ def unregister():
     bpy.utils.unregister_class(ImportImageVolume)
     bpy.utils.unregister_class(ShaderReplace)
     bpy.utils.unregister_class(UIPanel)
+
     if "scene_update" in bpy.app.handlers.scene_update_post:
         bpy.app.handlers.scene_update_post.remove(scene_update)
 
-    del bpy.types.Object.clip 
-    del bpy.types.Object.dither
-    del bpy.types.Object.azimuth
-    del bpy.types.Object.elevation
-    del bpy.types.Object.clipPlaneDepth
-    del bpy.types.Object.opacityFactor
-    del bpy.types.Object.lightFactor
-    
-    global volrender_texture 
-    global volrender_ramptext 
+    if vars.draw_handler != None:
+        bpy.types.SpaceView3D.draw_handler_remove(vars.draw_handler, "WINDOW")
 
-    if volrender_ramptext != -1:
-        glDeleteTextures (1, volrender_ramptext)
+    deleteObjectProperties()
 
-    if volrender_texture != -1:
-        glDeleteTextures (1, volrender_texture)
+    if vars.volrender_ramptext[0] != -1:
+        glDeleteTextures(1, vars.volrender_ramptext)
+
+    if vars.volrender_texture[0] != -1:
+        glDeleteTextures(1, vars.volrender_texture)
+
+    if vars.slice_program != None:
+        glDeleteProgram(vars.slice_program)
 
 if __name__ == "__main__":
     register()
+
+
+    
