@@ -586,7 +586,7 @@ def drawSlice(self, context, program, texture, sliceMode, slicePos, x = 0, y = 0
 # Helper functions
 def addCube(pixelDimsX, pixelDimsY, pixelDimsZ, pixelSpacingX, pixelSpacingY, pixelSpacingZ):
     #Control settings
-    bpy.context.user_preferences.system.use_mipmaps = False
+    #bpy.context.user_preferences.system.use_mipmaps = False
     bpy.context.scene.game_settings.material_mode = 'GLSL'
     bpy.context.space_data.viewport_shade = 'TEXTURED'
 
@@ -618,7 +618,7 @@ def addCube(pixelDimsX, pixelDimsY, pixelDimsZ, pixelSpacingX, pixelSpacingY, pi
 
 
 def update_colorRamp():
-    cr_node = bpy.data.scenes[0].node_tree.nodes['ColorRamp']
+    cr_node = bpy.data.scenes[0].node_tree.nodes['VolColorRamp']
     pixels = Buffer(GL_FLOAT, [vars.rampColors, 4])
 
     for x in range(0, vars.rampColors):
@@ -641,12 +641,20 @@ def addColorRamp():
     # Compositor need to be activated first before we can access the nodes.
     bpy.context.scene.use_nodes = True
 
-    nodes = bpy.context.scene.node_tree.nodes
+    tree = bpy.context.scene.node_tree
+    links = tree.links
 
     # Check if there already a color ramp is existing.
-    if not "ColorRamp" in nodes:
-        nodes.new("CompositorNodeValToRGB")
-        nodes['ColorRamp'].color_ramp.elements[0].color[3] = 0.0
+    if not "VolColorRamp" in tree.nodes:
+        # create Color Ramp node
+        ramp = tree.nodes.new("CompositorNodeValToRGB")
+        ramp.name = "VolColorRamp"
+        ramp.color_ramp.elements[0].color[3] = 0.0
+
+        # create Viewer node
+        viewer = tree.nodes.new("CompositorNodeViewer")
+        viewer.name = "VolViewer"
+        links.new(ramp.outputs[0],viewer.inputs[0])  # image-image
 
 def initColorRamp(program):
     pixels = Buffer(GL_FLOAT, [vars.rampColors, 4])
@@ -1104,7 +1112,7 @@ class UIPanel(bpy.types.Panel):
                     args = (self, context, vars.slice_program, vars.volrender_texture[0], int(context.object.sliceMode), context.object.slicePos, 0, 0, 200, 200)
                     vars.draw_handler = bpy.types.SpaceView3D.draw_handler_add(drawSlice, args, "WINDOW", "POST_PIXEL")
 
-            cr_node = scene.node_tree.nodes['ColorRamp']
+            cr_node = scene.node_tree.nodes['VolColorRamp']
             layout.template_color_ramp(cr_node, "color_ramp", expand=True)
 
             #this way the updating the color ramp sliders will work with actual Blender versions,
