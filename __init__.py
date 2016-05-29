@@ -328,10 +328,10 @@ def loadVolume(dirName, filelist, texture):
             if depth is 0:
                 width, height = imgData.size[0], imgData.size[1] 
                 data = Buffer(GL_BYTE, [len(files), width * height])
-                data[depth] = imgData.getdata()
+                data[depth] = imgData.getdata(0) # 0 = "R" ##imgData.convert("L").getdata()
             else:
                 if (width, height) == (imgData.size[0], imgData.size[1]):
-                    data[depth] = imgData.getdata()
+                    data[depth] = imgData.getdata(0)
                 else:
                     print('mismatch')
                     raise RunTimeError("image size mismatch")
@@ -408,16 +408,17 @@ def loadDCMVolume(dirName, filelist, texture):
         img_size = ds.pixel_array.shape
         imgData = ds.pixel_array.flat.copy().astype("f")
         #imgData = ds.PixelData
+        maximum = max(imgData)
 
         # check if all are of the same size
         if depth is 0:
             width, height = img_size[0], img_size[1] 
             data = Buffer(GL_FLOAT, [len(files), width * height])
-            data[depth] = imgData/max(imgData)
+            data[depth] = imgData/maximum
         else:
             if (width, height) == (img_size[0], img_size[1]):
                 #data[depth] = imgData[::2]
-                data[depth] = imgData/max(imgData)
+                data[depth] = imgData/maximum
             else:
                 print('mismatch')
                 raise RunTimeError("image size mismatch")
