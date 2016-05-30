@@ -61,7 +61,7 @@ class vars():
     draw_handler = None
 
     rampColors = 256
-    step  = 1.0 / (rampColors - 1.0)
+    step  = 1.0 / (rampColors -1)
     updateProgram = 0
 
 #
@@ -93,6 +93,7 @@ layout(location = 25) uniform float opacityFactor;
 layout(location = 26) uniform float lightFactor;
 layout(location = 27) uniform sampler3D tex;
 layout(location = 28) uniform sampler1D ramp;
+layout(location = 29) uniform int shaderType;
 
 varying vec3 pos;
 
@@ -103,6 +104,8 @@ const float stepSize = maxDist/float(numSamples);
 const float numberOfSlices = 96.0;
 const float slicesOverX = -10.0;
 const float slicesOverY = 10.0;
+
+const float rampColors = 258;
 
 struct Ray 
 {
@@ -204,35 +207,135 @@ void main()
         }   
     }
 
-    vec4 accum = vec4(0.0, 0.0, 0.0, 0.0);
-    vec4 sample = vec4(0.0, 0.0, 0.0, 0.0);
-    vec4 value = vec4(0.0, 0.0, 0.0, 0.0);
-    
     if (dither) //jaggy artefact dithering
     {
         pos = pos + step * (fract(sin(gl_FragCoord.x * 12.9898 + gl_FragCoord.y * 78.233) * 43758.5453));
     }
     
-    for (int i=0; i < numSamples && travel > 0.0; ++i, pos += step, travel -= stepSize)
+    /* luminance control raycast example */
+    if(shaderType == 1)
     {
-        float tf_pos;
-
-        tf_pos = texture3D(tex, pos).x;   
-        value = texture1D(ramp, tf_pos);
-
-        // Process the volume sample
-        sample.a = value.a * opacityFactor * (1.0 / float(numSamples));
-        sample.rgb = value.rgb * sample.a * lightFactor;
-        accum.rgb += (1.0 - accum.a) * sample.rgb;
-        accum.a += sample.a;
-
-        if(accum.a >= 1.0)
-            break;
+        for (int i=0; i < numSamples && travel > 0.0; ++i, pos += step, travel -= stepSize)
+        {
+        }
     }
 
-    gl_FragColor.rgb = accum.rgb;
-    gl_FragColor.a = accum.a;
+    /* brightness control raycast example */
+    else if  (shaderType == 2)
+    {
+        float val_threshold = opacityFactor * stepSize;
+        float brightness = lightFactor;
 
+        vec4 frag_color = vec4(0.0, 0.0, 0.0, 0.0);
+        vec4 color;
+
+        for (int i=0; i < numSamples && travel > 0.0; ++i, pos += step, travel -= stepSize)
+        {
+            float density = texture3D(tex, pos).r;
+
+            color.rgb = texture1D(ramp, density).rgb;
+            color.a   = density * stepSize * val_threshold * brightness;
+            frag_color.rgb = frag_color.rgb * (1.0 - color.a) + color.rgb * color.a;
+        }
+
+        if (frag_color == vec4(0.0,0.0,0.0,0.0))
+            discard;
+        else
+            gl_FragColor = vec4(frag_color.rgb,1.0);
+    }
+
+    /* density control raycast example */
+    else if  (shaderType == 3)
+    {
+        float val_threshold = opacityFactor * stepSize;
+        float brightness = lightFactor;
+
+        vec4 frag_color = vec4(0.0, 0.0, 0.0, 0.0);
+        vec4 color;
+
+        for (int i=0; i < numSamples && travel > 0.0; ++i, pos += step, travel -= stepSize)
+        {
+            float density = texture3D(tex, pos).r;
+
+            color.rgb = texture1D(ramp, val_threshold + density).rgb;
+            color.a   = density * stepSize * brightness;
+            frag_color.rgb = frag_color.rgb * (1.0 - color.a) + color.rgb * color.a;
+        }
+
+        if (frag_color == vec4(0.0,0.0,0.0,0.0))
+            discard;
+        else
+            gl_FragColor = vec4(frag_color.rgb,1.0);
+    }
+
+    /* color control raycast example */
+    else if  (shaderType == 4)
+    {
+        float val_threshold = opacityFactor * stepSize;
+        float brightness = lightFactor;
+
+        vec4 frag_color = vec4(0.0, 0.0, 0.0, 0.0);
+        vec4 color;
+
+        for (int i=0; i < numSamples && travel > 0.0; ++i, pos += step, travel -= stepSize)
+        {
+            float density = texture3D(tex, pos).r;
+            density += val_threshold - 0.5;
+            density = density*density*density;
+
+            color.rgb = texture1D(ramp, density).rgb;
+            color.a   = density * stepSize * brightness;
+            frag_color.rgb = frag_color.rgb * (1.0 - color.a) + color.rgb * color.a;
+        }
+
+        if (frag_color == vec4(0.0,0.0,0.0,0.0))
+            discard;
+        else
+            gl_FragColor = vec4(frag_color.rgb,1.0);
+    }
+
+    /* Maximum Intensity Projection raycast example */
+    else if  (shaderType == 7)
+    {
+        float val_threshold = opacityFactor / rampColors;
+        float max_val = 0.0;
+
+        for (int i=0; i < numSamples && travel > 0.0; ++i, pos += step, travel -= stepSize)
+        {
+            float density = texture3D(tex, pos).r;
+            max_val = max(max_val, density);
+        }
+
+        if (max_val >= val_threshold)
+            gl_FragColor = vec4(max_val);
+            //gl_FragColor = texture1D(ramp, max_val);
+        else
+            discard;
+    }
+
+    else
+    {
+        vec4 sample = vec4(0.0, 0.0, 0.0, 0.0);
+        vec4 value = vec4(0.0, 0.0, 0.0, 0.0);
+        vec4 accum = vec4(0.0, 0.0, 0.0, 0.0);
+    
+
+        for (int i=0; i < numSamples && travel > 0.0; ++i, pos += step, travel -= stepSize)
+        {
+            float tf_pos = texture3D(tex, pos).r;   
+            value = texture1D(ramp, tf_pos);
+
+            // Process the volume sample
+            sample.a = value.a * opacityFactor * stepSize;
+            sample.rgb = value.rgb * sample.a * lightFactor;
+            accum.rgb += (1.0 - accum.a) * sample.rgb;
+            accum.a += sample.a;
+
+            if(accum.a >= 1.0)
+                break;
+        }
+        gl_FragColor = accum;
+    }
 }
 """
 
@@ -623,7 +726,7 @@ def update_colorRamp():
     pixels = Buffer(GL_FLOAT, [vars.rampColors, 4])
 
     for x in range(0, vars.rampColors):
-       pixels[x] = cr_node.color_ramp.evaluate(x * vars.step)
+        pixels[x] = cr_node.color_ramp.evaluate(x * vars.step)
 
     glActiveTexture(GL_TEXTURE0 + vars.volrender_ramptext[0])
     glBindTexture(GL_TEXTURE_1D, vars.volrender_ramptext[0])
@@ -665,7 +768,7 @@ def initColorRamp(program):
     
     glPixelStorei(GL_UNPACK_ALIGNMENT,1)
     glBindTexture(GL_TEXTURE_1D, vars.volrender_ramptext[0])
-    glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP)
+    glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER)
     glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
     glTexParameterf(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
     glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA8, vars.rampColors, 0, GL_RGBA, GL_FLOAT, pixels)
@@ -789,10 +892,10 @@ def update_lightFactor(self, context):
     glUniform1f(26, self.lightFactor) 
     glUseProgram(0)
 
-#def update_shaderType(self, context):
-    #glUseProgram(vars.volrender_program)
-    #glUniform1i(29, int(self.shaderType)) 
-    #glUseProgram(0)
+def update_shaderType(self, context):
+    glUseProgram(vars.volrender_program)
+    glUniform1i(29, int(self.shaderType)) 
+    glUseProgram(0)
 
 def update_sliceMode(self, context):
     if vars.slice_program:
@@ -875,17 +978,17 @@ def initObjectProperties():
         max = 100,
         update = update_lightFactor)
 
-#   bpy.types.Object.shaderType = EnumProperty(
-#       items = [('1', 'Luminance', 'luminance light'),
-#                ('2', 'Brightness', 'brightness control'),
-#                ('3', 'Color', 'color control'),
-#                ('4', 'Density', 'density control'),
-#                ('5', 'Isosurface', 'isosurface'),
-#                ('6', 'Transparent Isosurface', 'transparent isosurface'),
-#                ('7', 'MIP', 'maximum intensity projection')],
-#       name = "Shader Type",
-#       default = '7',
-#       update=update_shaderType)
+    bpy.types.Object.shaderType = EnumProperty(
+       items = [('1', 'Luminance', 'luminance light'),
+                ('2', 'Brightness', 'brightness control'),
+                ('3', 'Color', 'color control'),
+                ('4', 'Density', 'density control'),
+                ('5', 'Isosurface', 'isosurface'),
+                ('6', 'Transparent Isosurface', 'transparent isosurface'),
+                ('7', 'MIP', 'maximum intensity projection')],
+       name = "Shader Type",
+       default = '7',
+       update=update_shaderType)
 
     bpy.types.Object.sliceMode = EnumProperty(
         items = [('0', '3D', 'Render 3D volume'),
@@ -913,7 +1016,7 @@ def deleteObjectProperties():
     del bpy.types.Object.clipPlaneDepth
     del bpy.types.Object.opacityFactor
     del bpy.types.Object.lightFactor
-    #del bpy.types.Object.shaderType
+    del bpy.types.Object.shaderType
     del bpy.types.Object.sliceMode
     del bpy.types.Object.slicePos
 
@@ -1065,7 +1168,7 @@ class ShaderReplace(Operator):
             update_dither(obj, bpy.context)
             update_opacityFactor(obj, bpy.context)
             update_lightFactor(obj, bpy.context)
-            #update_shaderType(obj, bpy.context)
+            update_shaderType(obj, bpy.context)
             update_sliceMode(obj, bpy.context)
             update_slicePos(obj, bpy.context)
 
@@ -1095,6 +1198,7 @@ class UIPanel(bpy.types.Panel):
             layout.prop(obj, 'opacityFactor')
             layout.prop(obj, 'lightFactor')
             layout.prop(obj, 'dither')
+            layout.prop(obj, 'shaderType')
 
             if obj.sliceMode == "0":
                 layout.prop(obj, 'azimuth')
