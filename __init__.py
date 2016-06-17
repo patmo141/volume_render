@@ -137,12 +137,12 @@ vec3 p2cart(float azimuth, float elevation)
 {
     float pi = 3.14159;
     float x, y, z, k;
-    float ele = -elevation * pi / 180.0;
-    float azi = (azimuth + 90.0) * pi / 180.0;
+    float ele = radians(-elevation);
+    float azi = radians(azimuth + 90.0);
 
     k = cos(ele);
-    z = sin(ele);
-    y = sin(azi) * k;
+    y = sin(ele);
+    z = sin(azi) * k;
     x = cos(azi) * k;
 
     return vec3( x, z, y );
@@ -297,7 +297,7 @@ void main()
     /* Maximum Intensity Projection raycast example */
     else if  (shaderType == 7)
     {
-        float val_threshold = opacityFactor / rampColors;
+        float val_threshold = opacityFactor;
         float max_val = 0.0;
 
         for (int i=0; i < numSamples && travel > 0.0; ++i, pos += step, travel -= stepSize)
@@ -307,8 +307,11 @@ void main()
         }
 
         if (max_val >= val_threshold)
+        {
             gl_FragColor = vec4(max_val);
-            //gl_FragColor = texture1D(ramp, max_val);
+            //gl_FragColor.rgb = texture1D(ramp, max_val).rgb;
+            //gl_FragColor.a = max_val;
+        }
         else
             discard;
     }
@@ -341,52 +344,63 @@ void main()
 
 
 strVS = """
-//in vec3 aVert;
-//uniform mat4 uMVMatrix;
-//uniform mat4 uPMatrix;
 uniform float SliceFrac;
 uniform int SliceMode;
-out vec3 texcoord;
+uniform float arc;
+varying vec3 texcoord;
 
 void main()
 {
+    vec2 aVert = gl_MultiTexCoord0.st;//gl_Vertex * 0.5 + 0.5;
+    
     // X-slice?
     if (SliceMode == 1)
     {
-//      texcoord = vec3(SliceFrac, aVert.x, 1.0-aVert.y);
-        texcoord = vec3(SliceFrac, gl_Vertex.x*0.5+0.5, gl_Vertex.y*0.5+0.5);
+        texcoord = vec3(SliceFrac, aVert.x, 1.0 - aVert.y);
     }
     // Y-slice?
     else if (SliceMode == 2)
     {
-//      texcoord = vec3(aVert.x, SliceFrac, 1.0-aVert.y);
-        texcoord = vec3(gl_Vertex.x*0.5+0.5, SliceFrac, gl_Vertex.y*0.5+0.5);
+        texcoord = vec3(aVert.x, SliceFrac, 1.0 - aVert.y);
     }
     // Z-slice
     else if (SliceMode == 3)
     {
-//      texcoord = vec3(aVert.x, 1.0-aVert.y, SliceFrac);
-        texcoord = vec3(gl_Vertex.x*0.5+0.5, gl_Vertex.y*0.5+0.5, SliceFrac);
+        texcoord = vec3(aVert.x, aVert.y, SliceFrac);
+    }
+    // Catenary-slice?
+    else if (SliceMode == 4)
+    {
+        texcoord = vec3((aVert.x - 0.5) * arc * 2.0  + 0.5, 0.0, 1.0 - aVert.y);
     }
 
     // calculate transformed vertex
-//  gl_Position = uPMatrix * uMVMatrix * vec4(aVert, 1.0); 
-//  gl_position = gl_ModelViewMatrix * gl_Vertex;
-    gl_Position = ftransform();
+    gl_Position = gl_ModelViewMatrix * gl_Vertex;
 }
 """
 
 strFS = """
 # version 330 compatibility
 in vec3 texcoord;
+uniform float SliceFrac;
+uniform int SliceMode;
+uniform float arc;
 uniform sampler3D tex;
-//out vec4 fragColor;
 
 void main()
 {
     // look up color in texture
+    float a = arc;
+
+    vec3 texcoord2 = texcoord;
+    if (SliceMode == 4)
+    {
+          texcoord2.y = a*cosh((texcoord.x*2.0-1.0)/a)-a+SliceFrac;
+
+    }
+
 //  float col = texture3D(tex, texcoord).r;
-    vec4 col = texture3D(tex, texcoord);
+    vec4 col = texture3D(tex, texcoord2);
 //  fragColor = col.rrra;
     gl_FragColor = col.rrrr;
 }
@@ -609,7 +623,36 @@ def loadShaders(strVS, strFS):
     return vars.slice_program
 
 
-def drawSlice(self, context, program, texture, sliceMode, slicePos, x = 0, y = 0, width = 0, height = 0):
+#
+# Draw catenary
+#
+from bpy_extras.view3d_utils import location_3d_to_region_2d
+import math
+
+def drawCatenary(self, context, arc = 0.5, x = 0.0, y = 0.0, z = 0.0, width = 0.0, height = 0.0):
+    glEnable(GL_BLEND)
+    glLineWidth(6)
+    region = context.region
+    region_data = context.region_data
+    a = arc
+
+    glColor4f(1, 0, 0, 0.5)
+    glBegin(GL_LINE_STRIP)
+    for i in range(-100, 100):
+        i = i / 100
+        i2 = i / 1.5
+        glVertex2f(*location_3d_to_region_2d(region, region_data, (i2+x, a * math.cosh(i2/a)+y, z)).to_tuple())
+    glEnd()
+
+    glDisable(GL_BLEND)
+
+    # restore opengl defaults
+    glColor4f(0.0, 0.0, 0.0, 1.0)
+    glLineWidth(1)
+    glDisable(GL_LINE_STIPPLE)
+
+
+def drawSlice(self, context, program, texture, sliceMode, slicePos, arc, x = 0, y = 0, width = 0, height = 0):
     """
     OpenGL code to draw a rectangle in the viewport
     """
@@ -646,6 +689,8 @@ def drawSlice(self, context, program, texture, sliceMode, slicePos, x = 0, y = 0
     glUniform1i(glGetUniformLocation(program, "SliceMode"), sliceMode)
     # set current slice fraction
     glUniform1f(glGetUniformLocation(program, "SliceFrac"), slicePos)
+    # set current slice fraction
+    glUniform1f(glGetUniformLocation(program, "arc"), arc)
     
     # enable texture
     #glEnable(GL_TEXTURE_3D)
@@ -686,6 +731,9 @@ def drawSlice(self, context, program, texture, sliceMode, slicePos, x = 0, y = 0
     glViewport(viewport[0], viewport[1], viewport[2], viewport[3])
     glScissor(viewport[0], viewport[1], viewport[2], viewport[3])
 
+    if sliceMode == 4:
+        drawCatenary(self, context, arc, 0.0, 1.2, 0.0)
+
 
 # Helper functions
 def addCube(pixelDimsX, pixelDimsY, pixelDimsZ, pixelSpacingX, pixelSpacingY, pixelSpacingZ):
@@ -703,7 +751,7 @@ def addCube(pixelDimsX, pixelDimsY, pixelDimsZ, pixelSpacingX, pixelSpacingY, pi
 
     # Create new cube
     if not 'VolCube' in bpy.data.objects:
-        bpy.ops.mesh.primitive_cube_add(location=(0,3,0))
+        bpy.ops.mesh.primitive_cube_add(location=(0,3,0), rotation=(0,3.14159,0))
         cube = bpy.context.object
         cube.name = 'VolCube'
 
@@ -907,9 +955,9 @@ def update_sliceMode(self, context):
             vars.draw_handler = None
 
         if vars.draw_handler == None:
-            args = (self, context, vars.slice_program, vars.volrender_texture[0], int(context.object.sliceMode), context.object.slicePos, 0, 0, 200, 200)
+            obj = context.object;
+            args = (self, context, vars.slice_program, vars.volrender_texture[0], int(obj.sliceMode), obj.slicePos, obj.arc, 0, 0, 200, 200)
             vars.draw_handler = bpy.types.SpaceView3D.draw_handler_add(drawSlice, args, "WINDOW", "POST_PIXEL")
-
 
 def update_slicePos(self, context):
     if vars.slice_program:
@@ -921,7 +969,19 @@ def update_slicePos(self, context):
             vars.draw_handler = None
 
         if vars.draw_handler == None:
-            args = (self, context, vars.slice_program, vars.volrender_texture[0], int(context.object.sliceMode), context.object.slicePos, 0, 0, 200, 200)
+            obj = context.object;
+            args = (self, context, vars.slice_program, vars.volrender_texture[0], int(obj.sliceMode), obj.slicePos, obj.arc, 0, 0, 200, 200)
+            vars.draw_handler = bpy.types.SpaceView3D.draw_handler_add(drawSlice, args, "WINDOW", "POST_PIXEL")
+
+def update_arc(self, context):
+    if vars.slice_program:
+        if vars.draw_handler != None:
+            bpy.types.SpaceView3D.draw_handler_remove(vars.draw_handler, "WINDOW")
+            vars.draw_handler = None
+
+        if vars.draw_handler == None:
+            obj = context.object;
+            args = (self, context, vars.slice_program, vars.volrender_texture[0], int(obj.sliceMode), obj.slicePos, obj.arc, 0, 0, 200, 200)
             vars.draw_handler = bpy.types.SpaceView3D.draw_handler_add(drawSlice, args, "WINDOW", "POST_PIXEL")
 
 
@@ -949,7 +1009,7 @@ def initObjectProperties():
     bpy.types.Object.elevation = FloatProperty(
         name = "Elevation", 
         description = "Enter a float",
-        default = 125.0,
+        default = -90.0,
         min = -360,
         max = 360,
         update=update_elevation)
@@ -985,7 +1045,8 @@ def initObjectProperties():
                 ('4', 'Density', 'density control'),
                 ('5', 'Isosurface', 'isosurface'),
                 ('6', 'Transparent Isosurface', 'transparent isosurface'),
-                ('7', 'MIP', 'maximum intensity projection')],
+                ('7', 'MIP', 'maximum intensity projection'),
+                ],
        name = "Shader Type",
        default = '7',
        update=update_shaderType)
@@ -993,8 +1054,10 @@ def initObjectProperties():
     bpy.types.Object.sliceMode = EnumProperty(
         items = [('0', '3D', 'Render 3D volume'),
                  ('1', 'X', 'Render 2D X axis slice'),
-                 ('2', 'Y', 'Render 2D X axis slice'),
-                 ('3', 'Z', 'Render 2D X axis slice')],
+                 ('2', 'Y', 'Render 2D Y axis slice'),
+                 ('3', 'Z', 'Render 2D Z axis slice'),
+                 ('4', 'C', 'Render cylindrical 2D slice'),
+                ],
         name = "Slice Mode",
         default = '0',
         update=update_sliceMode)
@@ -1002,10 +1065,17 @@ def initObjectProperties():
     bpy.types.Object.slicePos = FloatProperty(
         name = "Slice Position", 
         description = "Enter a float",
-        default = 0.5,
+        default = 0.11,
         min = 0.0,
         max = 1.0,
         update=update_slicePos)
+
+    bpy.types.Object.arc = FloatProperty(
+        name = "Catenary arc size", 
+        description = "Enter a float",
+        default = 0.23,
+        min = 0.01,
+        update=update_arc)
 
 
 def deleteObjectProperties():
@@ -1193,27 +1263,27 @@ class UIPanel(bpy.types.Panel):
         layout.operator('volume_render.replace_shader', text="Update Volume")
 
         if vars.volrender_ramptext[0] != 0 and obj != None and obj.name == 'VolCube':
-            #layout.prop(obj, 'shaderType')
-            layout.prop(obj, 'sliceMode')
+            layout.prop(obj, 'shaderType')
             layout.prop(obj, 'opacityFactor')
             layout.prop(obj, 'lightFactor')
+            layout.prop(obj, 'azimuth')
+            layout.prop(obj, 'elevation')
+            layout.prop(obj, 'clipPlaneDepth')
+            layout.prop(obj, 'clip')
             layout.prop(obj, 'dither')
-            layout.prop(obj, 'shaderType')
+            cr_node = scene.node_tree.nodes['VolColorRamp']
+            layout.template_color_ramp(cr_node, "color_ramp", expand=True)
+            layout.prop(obj, 'sliceMode')
 
             if obj.sliceMode == "0":
-                layout.prop(obj, 'azimuth')
-                layout.prop(obj, 'elevation')
-                layout.prop(obj, 'clipPlaneDepth')
-                layout.prop(obj, 'clip')
-
                 if vars.draw_handler != None:
                     bpy.types.SpaceView3D.draw_handler_remove(vars.draw_handler, "WINDOW")
                     vars.draw_handler = None
             else:
                 layout.prop(obj, 'slicePos')
+                if obj.sliceMode == "4":
+                   layout.prop(obj, 'arc')
 
-            cr_node = scene.node_tree.nodes['VolColorRamp']
-            layout.template_color_ramp(cr_node, "color_ramp", expand=True)
 
 
 def scene_update(context):
@@ -1238,7 +1308,7 @@ def scene_update(context):
         update_dither(obj, bpy.context)
         update_opacityFactor(obj, bpy.context)
         update_lightFactor(obj, bpy.context)
-        #update_shaderType(obj, bpy.context)
+        update_shaderType(obj, bpy.context)
 
     if vars.updateProgram > 0:
         vars.updateProgram -= 1
