@@ -1,0 +1,11 @@
+This Blender patch allows to get always the correct shader program number.
+
+Windows Blender build with patch.
+http://www.mediafire.com/download/2c618rgwyeub71k/BlenderWindowsPRGn.7z
+
+
+    import gpu
+
+    scene = bpy.data.scenes["Scene"]
+    material = bpy.data.materials["VolumeMat"]
+    vars.volrender_program = gpu.get_shader_program(scene, material)

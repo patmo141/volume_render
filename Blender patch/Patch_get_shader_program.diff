@@ -1,0 +1,118 @@
+diff --git a/source/blender/gpu/GPU_material.h b/source/blender/gpu/GPU_material.h
+index a79334d..eeb9e6b 100644
+--- a/source/blender/gpu/GPU_material.h
++++ b/source/blender/gpu/GPU_material.h
+@@ -308,6 +308,7 @@ typedef struct GPUShaderExport {
+ 
+ GPUShaderExport *GPU_shader_export(struct Scene *scene, struct Material *ma);
+ void GPU_free_shader_export(GPUShaderExport *shader);
++int *GPU_shader_program(struct Scene *scene, struct Material *ma);
+ 
+ /* Lamps */
+ 
+diff --git a/source/blender/gpu/GPU_shader.h b/source/blender/gpu/GPU_shader.h
+index 762329e..ad44110 100644
+--- a/source/blender/gpu/GPU_shader.h
++++ b/source/blender/gpu/GPU_shader.h
+@@ -72,6 +72,7 @@ void GPU_shader_unbind(void);
+ void *GPU_shader_get_interface(GPUShader *shader);
+ void GPU_shader_set_interface(GPUShader *shader, void *interface);
+ int GPU_shader_get_uniform(GPUShader *shader, const char *name);
++int GPU_shader_get_program(GPUShader *shader);
+ void GPU_shader_uniform_vector(GPUShader *shader, int location, int length,
+ 	int arraysize, const float *value);
+ void GPU_shader_uniform_vector_int(GPUShader *shader, int location, int length,
+diff --git a/source/blender/gpu/intern/gpu_material.c b/source/blender/gpu/intern/gpu_material.c
+index f14b2e6..529bc52 100644
+--- a/source/blender/gpu/intern/gpu_material.c
++++ b/source/blender/gpu/intern/gpu_material.c
+@@ -2787,6 +2787,16 @@ GPUShaderExport *GPU_shader_export(struct Scene *scene, struct Material *ma)
+ 	return shader;
+ }
+ 
++int *GPU_shader_program(struct Scene *scene, struct Material *ma)
++{
++	GPUMaterial *mat = GPU_material_from_blender(scene, ma, false);
++	
++	GPUPass *pass = (mat) ? mat->pass : NULL;
++	GPUShader *shader = pass->shader;
++
++	return GPU_shader_get_program(shader);
++}
++
+ void GPU_free_shader_export(GPUShaderExport *shader)
+ {
+ 	if (shader == NULL)
+diff --git a/source/blender/gpu/intern/gpu_shader.c b/source/blender/gpu/intern/gpu_shader.c
+index 5a1b38e..d8cf647 100644
+--- a/source/blender/gpu/intern/gpu_shader.c
++++ b/source/blender/gpu/intern/gpu_shader.c
+@@ -481,6 +481,11 @@ int GPU_shader_get_uniform(GPUShader *shader, const char *name)
+ 	return glGetUniformLocation(shader->program, name);
+ }
+ 
++int GPU_shader_get_program(GPUShader *shader)
++{
++	return shader->program;
++}
++
+ void *GPU_shader_get_interface(GPUShader *shader)
+ {
+ 	return shader->uniform_interface;
+diff --git a/source/blender/python/intern/gpu.c b/source/blender/python/intern/gpu.c
+index c3bb588..75f4514 100644
+--- a/source/blender/python/intern/gpu.c
++++ b/source/blender/python/intern/gpu.c
+@@ -315,6 +315,44 @@ static PyMethodDef meth_export_shader[] = {
+ 	{"export_shader", (PyCFunction)GPU_export_shader, METH_VARARGS | METH_KEYWORDS, GPU_export_shader_doc}
+ };
+ 
++PyDoc_STRVAR(GPU_program_shader_doc,
++"get_shader_program(material)\n"
++"\n"
++"   Returns the GLSL shader program number.\n"
++"\n"
++"   :rtype: int"
++);
++static PyObject *GPU_program_shader(PyObject *UNUSED(self), PyObject *args, PyObject *kwds)
++{
++	PyObject *pyscene;
++	PyObject *pymat;
++	Scene *scene;
++	Material *material;
++
++	static const char *kwlist[] = {"scene", "material", NULL};
++
++	if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO:export_shader", (char **)(kwlist), &pyscene, &pymat))
++		return NULL;
++
++	scene = (Scene *)PyC_RNA_AsPointer(pyscene, "Scene");
++	if (scene == NULL) {
++		return NULL;
++	}
++
++	material = (Material *)PyC_RNA_AsPointer(pymat, "Material");
++	if (material == NULL) {
++		return NULL;
++	}
++
++
++	return PyLong_FromLong((long) GPU_shader_program(scene, material));
++}
++
++static PyMethodDef meth_shader_program[] = {
++	{"get_shader_program", (PyCFunction)GPU_program_shader, METH_VARARGS | METH_KEYWORDS, GPU_program_shader_doc},
++	{NULL, NULL, 0, NULL}
++};
++
+ /* -------------------------------------------------------------------- */
+ /* Initialize Module */
+ 
+@@ -327,6 +365,7 @@ PyObject *GPU_initPython(void)
+ 	module = PyInit_gpu();
+ 
+ 	PyModule_AddObject(module, "export_shader", (PyObject *)PyCFunction_New(meth_export_shader, NULL));
++	PyModule_AddObject(module, "get_shader_program", (PyObject *)PyCFunction_New(meth_shader_program, NULL));
+ 
+ 	/* gpu.offscreen */
+ 	PyModule_AddObject(module, "offscreen", (submodule = BPyInit_gpu_offscreen()));
